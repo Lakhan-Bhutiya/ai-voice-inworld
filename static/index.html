@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Voice — Inworld TTS POC</title>
+<style>
+  :root { --bg:#0e0f1a; --panel:#1a1c2e; --accent:#7c5cff; --accent2:#46e0c8; --text:#e8e9f3; --muted:#9aa0b4; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:'Segoe UI',system-ui,sans-serif; background:radial-gradient(1200px 600px at 70% -10%, #25264a, var(--bg)); color:var(--text); min-height:100vh; }
+  .wrap { max-width:780px; margin:0 auto; padding:40px 20px 80px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  h1 span { background:linear-gradient(90deg,var(--accent),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .sub { color:var(--muted); margin:0 0 28px; font-size:14px; }
+  .card { background:var(--panel); border:1px solid #2a2d45; border-radius:16px; padding:22px; box-shadow:0 10px 40px rgba(0,0,0,.35); }
+  label { display:block; font-size:13px; color:var(--muted); margin:16px 0 6px; font-weight:600; letter-spacing:.02em; }
+  textarea, select, input { width:100%; background:#12131f; border:1px solid #2f3354; color:var(--text); border-radius:10px; padding:12px 14px; font-size:15px; font-family:inherit; }
+  textarea { resize:vertical; min-height:120px; }
+  .row { display:flex; gap:14px; }
+  .row > div { flex:1; }
+  .count { float:right; font-size:12px; color:var(--muted); }
+  button { margin-top:22px; width:100%; padding:14px; border:none; border-radius:12px; font-size:16px; font-weight:700; cursor:pointer;
+           background:linear-gradient(90deg,var(--accent),var(--accent2)); color:#0e0f1a; transition:transform .08s, opacity .2s; }
+  button:hover:not(:disabled) { transform:translateY(-1px); }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  button.ghost { width:auto; margin-top:10px; padding:9px 16px; font-size:14px; font-weight:600;
+                 background:transparent; color:var(--accent2); border:1px solid #34386083; }
+  button.ghost:hover:not(:disabled) { border-color:var(--accent2); background:#1a2230; }
+  button.ghost .hint { color:var(--muted); }
+  .result { margin-top:22px; display:none; }
+  .result.show { display:block; }
+  audio { width:100%; margin-top:8px; }
+  .dl { display:inline-block; margin-top:12px; color:var(--accent2); text-decoration:none; font-size:14px; font-weight:600; }
+  .err { color:#ff7a7a; font-size:14px; margin-top:14px; white-space:pre-wrap; }
+  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+  .chip { background:#222542; border:1px solid #34386083; color:var(--muted); padding:6px 12px; border-radius:20px; font-size:13px; cursor:pointer; }
+  .chip:hover { color:var(--text); border-color:var(--accent); }
+  .hint { font-weight:400; color:#717691; text-transform:none; letter-spacing:0; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span>AI Voice</span> — Human-like TTS</h1>
+  <p class="sub">Powered by the <strong>Inworld TTS API</strong> · proof of concept</p>
+
+  <div class="card">
+    <label>Text to speak <span class="count"><span id="count">0</span>/2000</span></label>
+    <textarea id="text" maxlength="2000" placeholder="Type something for the voice to say...">Hey there! This is a quick demo of human-like speech generation. Pretty natural, right?</textarea>
+    <button id="enhance" class="ghost">✨ Enhance with AI <span class="hint">— auto-insert emotion tags</span></button>
+
+    <label>Emotion tags <span class="hint">— click to insert at cursor, before the phrase it should affect</span></label>
+    <div class="chips" data-insert>
+      <span class="chip">[happy]</span>
+      <span class="chip">[sad]</span>
+      <span class="chip">[angry]</span>
+      <span class="chip">[surprised]</span>
+      <span class="chip">[whispering]</span>
+    </div>
+
+    <label>Non-verbal sounds <span class="hint">— dropped exactly where they occur</span></label>
+    <div class="chips" data-insert>
+      <span class="chip">[laugh]</span>
+      <span class="chip">[sigh]</span>
+      <span class="chip">[breathe]</span>
+      <span class="chip">[clear_throat]</span>
+      <span class="chip">[cough]</span>
+    </div>
+
+    <label>Global steering <span class="hint">— natural-language tone, best with tts-2 (optional)</span></label>
+    <input id="description" placeholder="e.g. speak sadly as if something bad just happened" />
+    <div class="chips" data-steer>
+      <span class="chip">cheerful and excited</span>
+      <span class="chip">calm and soothing</span>
+      <span class="chip">whispering softly, intimate</span>
+      <span class="chip">angry and intense</span>
+    </div>
+
+    <div class="row">
+      <div>
+        <label>Voice</label>
+        <select id="voiceId"><option value="Ashley">Ashley</option></select>
+      </div>
+      <div>
+        <label>Model</label>
+        <select id="modelId">
+          <option value="inworld-tts-1.5-max">tts-1.5-max (quality)</option>
+          <option value="inworld-tts-1.5-mini">tts-1.5-mini (fast)</option>
+          <option value="inworld-tts-2">tts-2 (newest)</option>
+        </select>
+      </div>
+    </div>
+
+    <button id="go">Generate speech</button>
+
+    <div class="result" id="result">
+      <audio id="player" controls></audio><br>
+      <a class="dl" id="download" download="speech.mp3">⬇ Download audio</a>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const text = $('text'), count = $('count'), go = $('go'), err = $('err'),
+      result = $('result'), player = $('player'), download = $('download');
+
+count.textContent = text.value.length;
+text.addEventListener('input', () => count.textContent = text.value.length);
+
+// Insert an emotion/non-verbal tag into the text at the cursor position.
+function insertAtCursor(el, str) {
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? el.value.length;
+  const pad = (start > 0 && el.value[start - 1] !== ' ') ? ' ' : '';
+  el.value = el.value.slice(0, start) + pad + str + ' ' + el.value.slice(end);
+  const pos = start + pad.length + str.length + 1;
+  el.focus(); el.setSelectionRange(pos, pos);
+  count.textContent = el.value.length;
+}
+document.querySelectorAll('.chips[data-insert] .chip').forEach(c =>
+  c.addEventListener('click', () => insertAtCursor(text, c.textContent)));
+document.querySelectorAll('.chips[data-steer] .chip').forEach(c =>
+  c.addEventListener('click', () => $('description').value = c.textContent));
+
+// AI enhancement: ask the backend (OpenAI gpt-4o-mini) to insert emotion tags.
+const enhance = $('enhance');
+enhance.addEventListener('click', async () => {
+  if (!text.value.trim()) return;
+  err.textContent = '';
+  enhance.disabled = true; const label = enhance.innerHTML;
+  enhance.textContent = 'Enhancing…';
+  try {
+    const r = await fetch('/api/enhance', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text.value })
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    text.value = (await r.json()).enhanced;
+    count.textContent = text.value.length;
+  } catch (e) {
+    err.textContent = 'Enhance error: ' + e.message;
+  } finally {
+    enhance.disabled = false; enhance.innerHTML = label;
+  }
+});
+
+// Load voice catalog (best-effort; falls back to default if it fails).
+fetch('/api/voices').then(r => r.ok ? r.json() : null).then(data => {
+  const voices = data?.voices || data?.result || [];
+  if (!Array.isArray(voices) || !voices.length) return;
+  const sel = $('voiceId');
+  sel.innerHTML = '';
+  voices.forEach(v => {
+    const id = v.voiceId || v.id || v.name;
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = id + (v.languages ? ` (${[].concat(v.languages).join(',')})` : '');
+    sel.appendChild(o);
+  });
+}).catch(() => {});
+
+go.addEventListener('click', async () => {
+  err.textContent = ''; result.classList.remove('show');
+  go.disabled = true; go.textContent = 'Generating…';
+  try {
+    const body = {
+      text: text.value,
+      voiceId: $('voiceId').value,
+      modelId: $('modelId').value,
+      description: $('description').value || null,
+      audioEncoding: 'MP3'
+    };
+    const r = await fetch('/api/synthesize', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    const data = await r.json();
+    player.src = data.dataUrl;
+    download.href = data.dataUrl;
+    result.classList.add('show');
+    player.play().catch(() => {});
+  } catch (e) {
+    err.textContent = 'Error: ' + e.message;
+  } finally {
+    go.disabled = false; go.textContent = 'Generate speech';
+  }
+});
+</script>
+</body>
+</html>
