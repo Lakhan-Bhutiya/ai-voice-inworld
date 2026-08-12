@@ -40,8 +40,14 @@ Request:
 ```
 Response:
 ```json
-{ "audioContent": "<base64>", "dataUrl": "data:audio/mpeg;base64,..." }
+{
+  "audioContent": "<base64>",
+  "dataUrl": "data:audio/mpeg;base64,...",
+  "usage": { "processedCharactersCount": 27, "modelId": "inworld-tts-1.5-max" }
+}
 ```
+`usage` is passed through verbatim from Inworld — it's the authoritative billed-character
+count for that call, straight from the vendor (not a client-side estimate).
 
 ### `POST /api/enhance` (optional, needs `OPENAI_API_KEY`)
 Inserts emotion/non-verbal tags into the text via gpt-4o-mini.

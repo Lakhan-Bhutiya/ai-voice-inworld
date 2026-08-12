@@ -1,0 +1,86 @@
+/* Design tokens. Everything else reads from these custom properties, so
+   light/dark is a single attribute flip on <html>. */
+
+:root,
+:root[data-bs-theme="light"] {
+  --paper: #ededE7;
+  --surface: #ffffff;
+  --surface-2: #f5f5f0;
+  --ink: #101010;
+  --ink-2: #55554e;
+  --ink-3: #8a8a82;
+  --ink-4: #b4b4aa;
+  --line: rgba(16, 16, 16, 0.1);
+  --line-strong: rgba(16, 16, 16, 0.18);
+  --accent: #ddff4f;
+  --accent-ink: #101010;
+  --accent-2: #ff9b2f;
+  --accent-2-ink: #101010;
+  --danger: #c8402a;
+  --shadow-sm: 0 1px 2px rgba(16, 16, 16, 0.05);
+  --shadow-md: 0 4px 20px rgba(16, 16, 16, 0.08);
+}
+
+:root[data-bs-theme="dark"] {
+  --paper: #0a0a0a;
+  --surface: #161616;
+  --surface-2: #1f1f1f;
+  --ink: #f2f2ee;
+  --ink-2: #a0a099;
+  --ink-3: #6e6e68;
+  --ink-4: #47473f;
+  --line: rgba(242, 242, 238, 0.1);
+  --line-strong: rgba(242, 242, 238, 0.18);
+  --accent: #a3e635;
+  --accent-ink: #101010;
+  --accent-2: #ff9b2f;
+  --accent-2-ink: #101010;
+  --danger: #ff6b52;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
+
+:root {
+  /* The player is always dark chrome, in both themes — a black slab dropped
+     into an otherwise light or dark page, matching the reference's use of
+     near-black blocks as UI chrome rather than page content. */
+  --block: #101010;
+  --block-surface: #1c1c1c;
+  --block-ink: #f5f5f0;
+  --block-ink-2: rgba(245, 245, 240, 0.6);
+  --block-ink-3: rgba(245, 245, 240, 0.38);
+  --block-line: rgba(245, 245, 240, 0.12);
+  /* Block chrome keeps its own accent, constant across both themes. The block
+     is always on a near-black ground, so it wants the darker-ground lime
+     regardless of page theme — and holding it constant means canvas drawn
+     inside the block can't be desynced by a theme flip at all. */
+  --block-accent: #a3e635;
+
+  /* Type */
+  --font-display: "General Sans", "Inter", system-ui, sans-serif;
+  --font-body: "Satoshi", "Inter", system-ui, sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+
+  --fs-display: clamp(2rem, 3.4vw, 3.25rem);
+  --fs-hero-compact: clamp(1.375rem, 2.4vw, 2rem);
+  --fs-section: clamp(1.25rem, 2vw, 1.5rem);
+  --fs-body: 0.9375rem;
+  --fs-small: 0.8125rem;
+  --fs-micro: 0.6875rem;
+
+  --tracking-display: -0.04em;
+  --tracking-section: -0.03em;
+  --tracking-micro: 0.09em;
+
+  /* Shape */
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
+  --radius-pill: 999px;
+
+  /* Motion */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-fast: 120ms;
+  --dur-med: 240ms;
+}

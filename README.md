@@ -6,7 +6,7 @@ backend and a small web UI. Supports **emotion / non-verbal tags** (`[happy]`,
 `gpt-4o-mini` can auto-insert those tags for you.
 
 > This is the **cloud (Inworld)** variant. A separate **local, free** variant
-> using the on-device Kokoro model lives in `../ai-voice`.
+> using the on-device Kokoro model lives in `../ai-voice-tts-poc`.
 
 ## Stack
 - Python 3.12 + FastAPI + httpx

@@ -87,16 +87,28 @@ async def health():
     }
 
 
+_voices_cache: dict | None = None
+
+
 @app.get("/api/voices")
 async def list_voices():
-    """Proxy Inworld's voice catalog so the UI can populate a voice picker."""
+    """Proxy Inworld's voice catalog so the UI can populate a voice picker.
+
+    The catalog (281 voices as of writing) doesn't change within a server's
+    lifetime, so it's cached in-process after the first successful fetch.
+    """
+    global _voices_cache
+    if _voices_cache is not None:
+        return _voices_cache
+
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.get(
             f"{INWORLD_BASE}/tts/v1/voices", headers=_auth_headers()
         )
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
-    return resp.json()
+    _voices_cache = resp.json()
+    return _voices_cache
 
 
 @app.post("/api/synthesize")
@@ -140,7 +152,11 @@ async def synthesize(req: SynthesizeRequest):
         "FLAC": "audio/flac",
     }.get(req.audioEncoding, "audio/mpeg")
 
-    return {"audioContent": audio_b64, "dataUrl": f"data:{mime};base64,{audio_b64}"}
+    return {
+        "audioContent": audio_b64,
+        "dataUrl": f"data:{mime};base64,{audio_b64}",
+        "usage": data.get("usage"),
+    }
 
 
 @app.post("/api/enhance")

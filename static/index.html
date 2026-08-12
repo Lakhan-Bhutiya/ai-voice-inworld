@@ -1,191 +1,307 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>AI Voice — Inworld TTS POC</title>
-<style>
-  :root { --bg:#0e0f1a; --panel:#1a1c2e; --accent:#7c5cff; --accent2:#46e0c8; --text:#e8e9f3; --muted:#9aa0b4; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family:'Segoe UI',system-ui,sans-serif; background:radial-gradient(1200px 600px at 70% -10%, #25264a, var(--bg)); color:var(--text); min-height:100vh; }
-  .wrap { max-width:780px; margin:0 auto; padding:40px 20px 80px; }
-  h1 { font-size:28px; margin:0 0 4px; }
-  h1 span { background:linear-gradient(90deg,var(--accent),var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .sub { color:var(--muted); margin:0 0 28px; font-size:14px; }
-  .card { background:var(--panel); border:1px solid #2a2d45; border-radius:16px; padding:22px; box-shadow:0 10px 40px rgba(0,0,0,.35); }
-  label { display:block; font-size:13px; color:var(--muted); margin:16px 0 6px; font-weight:600; letter-spacing:.02em; }
-  textarea, select, input { width:100%; background:#12131f; border:1px solid #2f3354; color:var(--text); border-radius:10px; padding:12px 14px; font-size:15px; font-family:inherit; }
-  textarea { resize:vertical; min-height:120px; }
-  .row { display:flex; gap:14px; }
-  .row > div { flex:1; }
-  .count { float:right; font-size:12px; color:var(--muted); }
-  button { margin-top:22px; width:100%; padding:14px; border:none; border-radius:12px; font-size:16px; font-weight:700; cursor:pointer;
-           background:linear-gradient(90deg,var(--accent),var(--accent2)); color:#0e0f1a; transition:transform .08s, opacity .2s; }
-  button:hover:not(:disabled) { transform:translateY(-1px); }
-  button:disabled { opacity:.5; cursor:not-allowed; }
-  button.ghost { width:auto; margin-top:10px; padding:9px 16px; font-size:14px; font-weight:600;
-                 background:transparent; color:var(--accent2); border:1px solid #34386083; }
-  button.ghost:hover:not(:disabled) { border-color:var(--accent2); background:#1a2230; }
-  button.ghost .hint { color:var(--muted); }
-  .result { margin-top:22px; display:none; }
-  .result.show { display:block; }
-  audio { width:100%; margin-top:8px; }
-  .dl { display:inline-block; margin-top:12px; color:var(--accent2); text-decoration:none; font-size:14px; font-weight:600; }
-  .err { color:#ff7a7a; font-size:14px; margin-top:14px; white-space:pre-wrap; }
-  .chips { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
-  .chip { background:#222542; border:1px solid #34386083; color:var(--muted); padding:6px 12px; border-radius:20px; font-size:13px; cursor:pointer; }
-  .chip:hover { color:var(--text); border-color:var(--accent); }
-  .hint { font-weight:400; color:#717691; text-transform:none; letter-spacing:0; }
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Voice Inworld TTS Studio</title>
+  <meta name="description" content="Human-like text-to-speech over the Inworld TTS API." />
+
+  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700,900&display=swap" rel="stylesheet">
+  <link href="https://api.fontshare.com/v2/css?f[]=general-sans@500,600,700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/base.css">
+  <link rel="stylesheet" href="/static/css/components.css">
 </head>
+
 <body>
-<div class="wrap">
-  <h1><span>AI Voice</span> — Human-like TTS</h1>
-  <p class="sub">Powered by the <strong>Inworld TTS API</strong> · proof of concept</p>
 
-  <div class="card">
-    <label>Text to speak <span class="count"><span id="count">0</span>/2000</span></label>
-    <textarea id="text" maxlength="2000" placeholder="Type something for the voice to say...">Hey there! This is a quick demo of human-like speech generation. Pretty natural, right?</textarea>
-    <button id="enhance" class="ghost">✨ Enhance with AI <span class="hint">— auto-insert emotion tags</span></button>
+  <div class="app-shell">
 
-    <label>Emotion tags <span class="hint">— click to insert at cursor, before the phrase it should affect</span></label>
-    <div class="chips" data-insert>
-      <span class="chip">[happy]</span>
-      <span class="chip">[sad]</span>
-      <span class="chip">[angry]</span>
-      <span class="chip">[surprised]</span>
-      <span class="chip">[whispering]</span>
-    </div>
-
-    <label>Non-verbal sounds <span class="hint">— dropped exactly where they occur</span></label>
-    <div class="chips" data-insert>
-      <span class="chip">[laugh]</span>
-      <span class="chip">[sigh]</span>
-      <span class="chip">[breathe]</span>
-      <span class="chip">[clear_throat]</span>
-      <span class="chip">[cough]</span>
-    </div>
-
-    <label>Global steering <span class="hint">— natural-language tone, best with tts-2 (optional)</span></label>
-    <input id="description" placeholder="e.g. speak sadly as if something bad just happened" />
-    <div class="chips" data-steer>
-      <span class="chip">cheerful and excited</span>
-      <span class="chip">calm and soothing</span>
-      <span class="chip">whispering softly, intimate</span>
-      <span class="chip">angry and intense</span>
-    </div>
-
-    <div class="row">
-      <div>
-        <label>Voice</label>
-        <select id="voiceId"><option value="Ashley">Ashley</option></select>
+    <nav class="rail">
+      <div class="rail-mark">AV</div>
+      <div class="rail-nav">
+        <button type="button" class="rail-link active" data-view="studio" aria-label="Studio" title="Studio (1)">
+          <i class="fa-solid fa-wave-square"></i>
+        </button>
+        <button type="button" class="rail-link" data-view="voices" aria-label="Voices" title="Voices (2)">
+          <i class="fa-solid fa-users"></i>
+        </button>
+        <button type="button" class="rail-link" data-view="costs" aria-label="Costs" title="Costs (3)">
+          <i class="fa-solid fa-coins"></i>
+        </button>
       </div>
-      <div>
-        <label>Model</label>
-        <select id="modelId">
-          <option value="inworld-tts-1.5-max">tts-1.5-max (quality)</option>
-          <option value="inworld-tts-1.5-mini">tts-1.5-mini (fast)</option>
-          <option value="inworld-tts-2">tts-2 (newest)</option>
-        </select>
+      <div class="rail-foot">
+        <button type="button" class="rail-theme-toggle theme-toggle-btn" id="themeToggle"
+          aria-label="Switch to dark theme">
+          <i class="fa-solid fa-moon"></i>
+        </button>
       </div>
-    </div>
+    </nav>
 
-    <button id="go">Generate speech</button>
+    <main class="main">
+      <div class="main-inner">
 
-    <div class="result" id="result">
-      <audio id="player" controls></audio><br>
-      <a class="dl" id="download" download="speech.mp3">⬇ Download audio</a>
-    </div>
-    <div class="err" id="err"></div>
+        <div class="app-topbar">
+          <span class="micro">Inworld TTS · Proof of concept</span>
+          <div class="status-chip" role="status" aria-live="polite">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Checking…</span>
+          </div>
+        </div>
+
+        <!-- ============================ STUDIO ============================ -->
+        <section class="view active" data-view="studio">
+          <div class="hero">
+            <div>
+              <div class="hero-eyebrow"><span class="micro">01 · Studio</span></div>
+              <h1 class="hero-line">Generate speech that<br><span class="accent-mark">sounds human.</span></h1>
+            </div>
+            <div>
+              <p class="hero-sub">Type a script, pick from 281 real Inworld voices, and steer tone with
+                inline emotion tags or natural-language direction. <kbd class="mono">⌘⏎</kbd> to generate.</p>
+            </div>
+          </div>
+
+          <div class="row g-3">
+            <div class="col-lg-7">
+              <div class="panel">
+                <div class="panel-head">
+                  <h2 class="section-title"><span class="index">01</span>Script</h2>
+                  <span class="micro mono"><span id="scriptCount">0</span> / 2000</span>
+                </div>
+
+                <textarea id="scriptText" class="script-field" maxlength="2000"
+                  placeholder="Type something for the voice to say…">Hey there! This is a quick demo of human-like speech generation. Pretty natural, right?</textarea>
+
+                <div class="field-foot">
+                  <button type="button" class="btn-outline" id="enhanceBtn">
+                    <i class="fa-solid fa-wand-magic-sparkles"></i> Enhance with AI
+                  </button>
+                </div>
+
+                <div class="micro mt-3 mb-1">Emotion tags click to insert before the phrase it should affect</div>
+                <div class="tag-row" data-tag-group>
+                  <button type="button" class="pill">[happy]</button>
+                  <button type="button" class="pill">[sad]</button>
+                  <button type="button" class="pill">[angry]</button>
+                  <button type="button" class="pill">[surprised]</button>
+                  <button type="button" class="pill">[whispering]</button>
+                </div>
+
+                <div class="micro mt-3 mb-1">Non-verbal sounds dropped exactly where they occur</div>
+                <div class="tag-row" data-tag-group>
+                  <button type="button" class="pill">[laugh]</button>
+                  <button type="button" class="pill">[sigh]</button>
+                  <button type="button" class="pill">[breathe]</button>
+                  <button type="button" class="pill">[clear_throat]</button>
+                  <button type="button" class="pill">[cough]</button>
+                </div>
+
+                <div class="micro mt-3 mb-1">Global direction natural-language tone, best with tts-2 (optional)</div>
+                <input id="directionInput" class="direction-input"
+                  placeholder="e.g. speak sadly as if something bad just happened" />
+                <div class="tag-row" data-direction-presets>
+                  <button type="button" class="pill">cheerful and excited</button>
+                  <button type="button" class="pill">calm and soothing</button>
+                  <button type="button" class="pill">whispering softly, intimate</button>
+                  <button type="button" class="pill">angry and intense</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="col-lg-5">
+              <div class="panel" id="studioVoicePanel">
+                <div class="panel-head">
+                  <h2 class="section-title"><span class="index">02</span>Voice</h2>
+                  <span class="micro mono" data-role="voice-count"> of </span>
+                </div>
+
+                <div class="voice-search-wrap">
+                  <i class="fa-solid fa-magnifying-glass"></i>
+                  <input class="voice-search" data-role="voice-search"
+                    placeholder="Search voices  name, style, use case… (⌘K)" />
+                </div>
+
+                <div class="facet-group" data-role="facets-lang"></div>
+                <div class="facet-group" data-role="facets-tag"></div>
+
+                <div class="voice-list" data-role="voice-list" aria-label="Voice"></div>
+
+                <div class="row g-2 mt-1">
+                  <div class="col-6">
+                    <label class="micro d-block mb-1">Model</label>
+                    <select id="modelSelect" class="direction-input"
+                      style="padding:9px 12px; font-size: var(--fs-small);">
+                      <option value="inworld-tts-1.5-max">tts-1.5-max (quality)</option>
+                      <option value="inworld-tts-1.5-mini">tts-1.5-mini (fast)</option>
+                      <option value="inworld-tts-2">tts-2 (newest)</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="historySection">
+            <div class="micro mt-2" id="historyLabel" style="display:none;">This session's renders</div>
+            <div class="history-strip" id="historyStrip"></div>
+          </div>
+
+          <div class="dock-wrap">
+            <div class="dock">
+              <button type="button" class="dock-play" id="dockPlay" aria-label="Generate speech">
+                <canvas class="dock-ripple-canvas" id="rippleCanvas" aria-hidden="true"></canvas>
+                <i class="fa-solid fa-play"></i>
+              </button>
+              <div class="dock-body">
+                <div class="dock-meta">
+                  <span class="dock-meta-label" id="dockMetaLabel">Ready to generate</span>
+                  <span class="dock-meta-usage" id="dockMetaUsage"></span>
+                </div>
+                <canvas class="dock-wave" id="dockWave"></canvas>
+                <div class="dock-time">
+                  <span id="timeCurrent">0:00</span>
+                  <span id="timeTotal">0:00</span>
+                </div>
+              </div>
+              <div class="dock-actions">
+                <a class="dock-btn" id="downloadLink" download aria-label="Download audio" href="#"
+                  onclick="return this.href!=='#'">
+                  <i class="fa-solid fa-download"></i>
+                </a>
+                <button type="button" class="dock-btn" id="regenBtn" aria-label="Regenerate">
+                  <i class="fa-solid fa-rotate-right"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============================ VOICES ============================ -->
+        <section class="view" data-view="voices">
+          <div class="hero">
+            <div>
+              <div class="hero-eyebrow"><span class="micro">02 · Voices</span></div>
+              <h1 class="hero-line">281 real voices,<br><span class="accent-mark">browse and filter.</span></h1>
+            </div>
+            <div>
+              <p class="hero-sub">Every voice below comes straight from the Inworld catalog pick one here
+                and it becomes the active voice in the Studio.</p>
+            </div>
+          </div>
+
+          <div class="panel" id="voicesGridPanel">
+            <div class="panel-head">
+              <h2 class="section-title">All voices</h2>
+              <span class="micro mono" data-role="voice-count"> of </span>
+            </div>
+            <div class="voice-search-wrap">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input class="voice-search" data-role="voice-search" placeholder="Search by name, style, or use case…" />
+            </div>
+            <div class="facet-group" data-role="facets-lang"></div>
+            <div class="facet-group" data-role="facets-tag"></div>
+            <div class="voice-grid" data-role="voice-list" aria-label="All voices"></div>
+          </div>
+        </section>
+
+        <!-- ============================ COSTS ============================ -->
+        <section class="view" data-view="costs">
+          <div class="hero">
+            <div>
+              <div class="hero-eyebrow"><span class="micro">03 · Costs</span></div>
+              <h1 class="hero-line">What this<br><span class="accent-mark">actually costs.</span></h1>
+            </div>
+            <div>
+              <p class="hero-sub">Real published rates, and a running total for what you've generated
+                this session nothing here is estimated after the fact.</p>
+            </div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat-tile">
+              <span class="micro">This session · generations</span>
+              <div class="stat-tile-value mono" id="statGenerations">0</div>
+            </div>
+            <div class="stat-tile">
+              <span class="micro">This session · characters billed</span>
+              <div class="stat-tile-value mono" id="statChars">0</div>
+            </div>
+            <div class="stat-tile">
+              <span class="micro">This session · est. cost</span>
+              <div class="stat-tile-value mono" id="statCost">$0.00</div>
+            </div>
+            <div class="stat-tile">
+              <span class="micro">This session · enhance calls</span>
+              <div class="stat-tile-value mono" id="statEnhances">0</div>
+            </div>
+          </div>
+
+          <div class="panel mb-3">
+            <div class="panel-head">
+              <h2 class="section-title">Inworld TTS per character</h2>
+            </div>
+            <div class="rate-grid">
+              <div class="rate-card">
+                <span class="micro">Realtime TTS-2</span>
+                <div class="rate-card-price">$5 <span>/ 1M chars</span></div>
+                <p class="text-muted-2" style="font-size:var(--fs-small); margin:0;">Newest, most expressive,
+                  natural-language steering.</p>
+              </div>
+              <div class="rate-card featured">
+                <span class="micro">TTS-1.5 Max <span class="text-fade"> default</span></span>
+                <div class="rate-card-price">$10 <span>/ 1M chars</span></div>
+                <p class="text-muted-2" style="font-size:var(--fs-small); margin:0;">Best quality-to-price; what this
+                  app uses by default.</p>
+              </div>
+              <div class="rate-card">
+                <span class="micro">TTS-1.5 Mini</span>
+                <div class="rate-card-price">$15→7 <span>/ 1M chars</span></div>
+                <p class="text-muted-2" style="font-size:var(--fs-small); margin:0;">Cheapest/fastest at volume; tiered
+                  pricing.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="section-title">Quick calculator</h2>
+            </div>
+            <div class="calc-row">
+              <input type="number" class="calc-input" id="calcChars" placeholder="characters" min="0" value="1000" />
+              <div class="calc-results" id="calcResults"></div>
+            </div>
+            <p class="text-muted-3" style="font-size:var(--fs-small); margin:14px 0 0;">
+              ~1,000 characters ≈ ~165 words ≈ ~1 minute of speech. Rates as of Aug 2026 see
+              <code>COSTING.md</code> for the full breakdown and OpenAI enhance pricing.
+            </p>
+          </div>
+        </section>
+
+      </div>
+    </main>
+
   </div>
-</div>
 
-<script>
-const $ = id => document.getElementById(id);
-const text = $('text'), count = $('count'), go = $('go'), err = $('err'),
-      result = $('result'), player = $('player'), download = $('download');
+  <!-- Mobile bottom nav (rail is hidden below 576px) -->
+  <nav class="mobile-nav d-sm-none" id="mobileNav">
+    <button type="button" class="mnav-link active" data-view="studio" aria-label="Studio"><i
+        class="fa-solid fa-wave-square"></i></button>
+    <button type="button" class="mnav-link" data-view="voices" aria-label="Voices"><i
+        class="fa-solid fa-users"></i></button>
+    <button type="button" class="mnav-link" data-view="costs" aria-label="Costs"><i
+        class="fa-solid fa-coins"></i></button>
+    <button type="button" class="mnav-link theme-toggle-btn" id="mobileThemeToggle" aria-label="Toggle theme"><i
+        class="fa-solid fa-moon"></i></button>
+  </nav>
 
-count.textContent = text.value.length;
-text.addEventListener('input', () => count.textContent = text.value.length);
+  <div class="toast-stack" id="toastStack" aria-live="polite"></div>
 
-// Insert an emotion/non-verbal tag into the text at the cursor position.
-function insertAtCursor(el, str) {
-  const start = el.selectionStart ?? el.value.length;
-  const end = el.selectionEnd ?? el.value.length;
-  const pad = (start > 0 && el.value[start - 1] !== ' ') ? ' ' : '';
-  el.value = el.value.slice(0, start) + pad + str + ' ' + el.value.slice(end);
-  const pos = start + pad.length + str.length + 1;
-  el.focus(); el.setSelectionRange(pos, pos);
-  count.textContent = el.value.length;
-}
-document.querySelectorAll('.chips[data-insert] .chip').forEach(c =>
-  c.addEventListener('click', () => insertAtCursor(text, c.textContent)));
-document.querySelectorAll('.chips[data-steer] .chip').forEach(c =>
-  c.addEventListener('click', () => $('description').value = c.textContent));
-
-// AI enhancement: ask the backend (OpenAI gpt-4o-mini) to insert emotion tags.
-const enhance = $('enhance');
-enhance.addEventListener('click', async () => {
-  if (!text.value.trim()) return;
-  err.textContent = '';
-  enhance.disabled = true; const label = enhance.innerHTML;
-  enhance.textContent = 'Enhancing…';
-  try {
-    const r = await fetch('/api/enhance', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: text.value })
-    });
-    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-    text.value = (await r.json()).enhanced;
-    count.textContent = text.value.length;
-  } catch (e) {
-    err.textContent = 'Enhance error: ' + e.message;
-  } finally {
-    enhance.disabled = false; enhance.innerHTML = label;
-  }
-});
-
-// Load voice catalog (best-effort; falls back to default if it fails).
-fetch('/api/voices').then(r => r.ok ? r.json() : null).then(data => {
-  const voices = data?.voices || data?.result || [];
-  if (!Array.isArray(voices) || !voices.length) return;
-  const sel = $('voiceId');
-  sel.innerHTML = '';
-  voices.forEach(v => {
-    const id = v.voiceId || v.id || v.name;
-    const o = document.createElement('option');
-    o.value = id;
-    o.textContent = id + (v.languages ? ` (${[].concat(v.languages).join(',')})` : '');
-    sel.appendChild(o);
-  });
-}).catch(() => {});
-
-go.addEventListener('click', async () => {
-  err.textContent = ''; result.classList.remove('show');
-  go.disabled = true; go.textContent = 'Generating…';
-  try {
-    const body = {
-      text: text.value,
-      voiceId: $('voiceId').value,
-      modelId: $('modelId').value,
-      description: $('description').value || null,
-      audioEncoding: 'MP3'
-    };
-    const r = await fetch('/api/synthesize', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
-    });
-    if (!r.ok) throw new Error((await r.json()).detail || r.statusText);
-    const data = await r.json();
-    player.src = data.dataUrl;
-    download.href = data.dataUrl;
-    result.classList.add('show');
-    player.play().catch(() => {});
-  } catch (e) {
-    err.textContent = 'Error: ' + e.message;
-  } finally {
-    go.disabled = false; go.textContent = 'Generate speech';
-  }
-});
-</script>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script type="module" src="/static/js/app.js"></script>
 </body>
+
 </html>
