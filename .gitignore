@@ -10,3 +10,6 @@ __pycache__/
 server.log
 *.mp3
 *.wav
+
+# Local database + stored audio renders
+data/

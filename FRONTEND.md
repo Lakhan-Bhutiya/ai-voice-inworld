@@ -33,21 +33,36 @@ Proxies Inworld's catalog. Shape (fields may vary):
 | `modelId` | string | no | `inworld-tts-1.5-max` (default), `inworld-tts-1.5-mini`, `inworld-tts-2` |
 | `description` | string | no | natural-language steering, e.g. `"speak sadly"` (best on tts-2) |
 | `audioEncoding` | string | no | `MP3` (default), `LINEAR16`, `WAV`, `OGG_OPUS`, `FLAC` |
+| `speakingRate` | number | no | speed, `0.5`–`1.5` (1.0 = normal) |
+| `temperature` | number | no | variation `0`–`2`; ignored on tts-2 |
+| `deliveryMode` | string | no | `STABLE` \| `BALANCED` \| `CREATIVE` (tts-2 only) |
+| `sessionId` | string | no | persist this render to the session's history (see below) |
+
+**Pauses:** put SSML `<break time="0.5s"/>` inside `text` for silences (≤10s each, ≤20 per request).
 
 Request:
 ```json
-{ "text": "[happy] Hello there! [laugh]", "voiceId": "Ashley", "modelId": "inworld-tts-1.5-max" }
+{ "text": "Let me think. <break time=\"1s\"/> Okay!", "voiceId": "Ashley",
+  "modelId": "inworld-tts-1.5-max", "speakingRate": 0.9, "sessionId": "abc123" }
 ```
 Response:
 ```json
 {
   "audioContent": "<base64>",
   "dataUrl": "data:audio/mpeg;base64,...",
-  "usage": { "processedCharactersCount": 27, "modelId": "inworld-tts-1.5-max" }
+  "usage": { "processedCharactersCount": 27, "modelId": "inworld-tts-1.5-max" },
+  "renderId": "…", "audioUrl": "/api/audio/…"   // present when sessionId was sent
 }
 ```
-`usage` is passed through verbatim from Inworld — it's the authoritative billed-character
-count for that call, straight from the vendor (not a client-side estimate).
+`usage` is passed through verbatim from Inworld — the authoritative billed-character count.
+`renderId`/`audioUrl` appear when the render was persisted to session history.
+
+### Session history & custom voices
+- `GET /api/history?sessionId=…` → `{ history: [{ renderId, text, voiceId, voiceName, modelId, audioUrl, charsBilled, createdAt }] }`
+- `GET /api/audio/{renderId}` → the stored audio file (replay without re-billing)
+- `DELETE /api/history/{renderId}`
+- `POST /api/voices/clone` (multipart: `file`, `displayName`, `languageCode`, `transcription?`, `sessionId?`) → clone a voice from a 5–15s sample (wav/mp3/webm, ≤4MB). Cloned voices appear first in `GET /api/voices` with `"custom": true`.
+- `GET /api/voices/custom` · `DELETE /api/voices/custom/{voiceId}`
 
 ### `POST /api/enhance` (optional, needs `OPENAI_API_KEY`)
 Inserts emotion/non-verbal tags into the text via gpt-4o-mini.

@@ -942,3 +942,22 @@
   color: var(--accent-ink);
   background: var(--block-accent);
 }
+
+/* ---- Voice clone: record/upload row ------------------------------------ */
+.clone-sample-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.clone-file { flex: 1 1 160px; min-width: 140px; }
+.clone-preview { width: 100%; margin-top: 10px; }
+#recordBtn.is-recording {
+  color: #fff; border-color: #e5484d; background: #e5484d;
+  animation: recPulse 1.2s ease-in-out infinite;
+}
+@keyframes recPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.5); }
+  50%      { box-shadow: 0 0 0 6px rgba(229, 72, 77, 0); }
+}
+
+/* ---- Delivery control range sliders ------------------------------------ */
+.ctrl-range {
+  width: 100%; margin-top: 6px; accent-color: var(--accent, #6c5ce7);
+  cursor: pointer;
+}

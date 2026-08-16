@@ -100,6 +100,14 @@
                   <button type="button" class="pill">[cough]</button>
                 </div>
 
+                <div class="micro mt-3 mb-1">Pauses insert a silence at the cursor (SSML break)</div>
+                <div class="tag-row" data-tag-group>
+                  <button type="button" class="pill" data-insert='<break time="0.3s"/>'>· 0.3s</button>
+                  <button type="button" class="pill" data-insert='<break time="0.5s"/>'>·· 0.5s</button>
+                  <button type="button" class="pill" data-insert='<break time="1s"/>'>··· 1s</button>
+                  <button type="button" class="pill" data-insert='<break time="2s"/>'>2s pause</button>
+                </div>
+
                 <div class="micro mt-3 mb-1">Global direction natural-language tone, best with tts-2 (optional)</div>
                 <input id="directionInput" class="direction-input"
                   placeholder="e.g. speak sadly as if something bad just happened" />
@@ -139,6 +147,26 @@
                       <option value="inworld-tts-1.5-mini">tts-1.5-mini (fast)</option>
                       <option value="inworld-tts-2">tts-2 (newest)</option>
                     </select>
+                  </div>
+                  <div class="col-6">
+                    <label class="micro d-block mb-1">Delivery <span class="micro">tts-2</span></label>
+                    <select id="deliverySelect" class="direction-input"
+                      style="padding:9px 12px; font-size: var(--fs-small);">
+                      <option value="">Default</option>
+                      <option value="STABLE">Stable</option>
+                      <option value="BALANCED">Balanced</option>
+                      <option value="CREATIVE">Creative</option>
+                    </select>
+                  </div>
+                  <div class="col-6">
+                    <label class="micro d-block mb-1">Speed <span class="mono" id="speedVal">1.0×</span></label>
+                    <input id="speedInput" type="range" min="0.5" max="1.5" step="0.1" value="1"
+                      class="ctrl-range" />
+                  </div>
+                  <div class="col-6">
+                    <label class="micro d-block mb-1">Variation <span class="mono" id="tempVal">1.0</span></label>
+                    <input id="tempInput" type="range" min="0" max="2" step="0.1" value="1"
+                      class="ctrl-range" />
                   </div>
                 </div>
               </div>
@@ -190,6 +218,43 @@
             <div>
               <p class="hero-sub">Every voice below comes straight from the Inworld catalog pick one here
                 and it becomes the active voice in the Studio.</p>
+            </div>
+          </div>
+
+          <div class="panel" id="cloneVoicePanel">
+            <div class="panel-head">
+              <h2 class="section-title"><i class="fa-solid fa-clone"></i>&nbsp;Clone your own voice</h2>
+              <span class="micro">5–15s sample · wav/mp3 · ≤4MB</span>
+            </div>
+            <div class="row g-2">
+              <div class="col-md-4">
+                <label class="micro d-block mb-1">Voice name</label>
+                <input id="cloneName" class="direction-input" placeholder="e.g. My Narrator" />
+              </div>
+              <div class="col-md-3">
+                <label class="micro d-block mb-1">Language</label>
+                <input id="cloneLang" class="direction-input" value="en-US" />
+              </div>
+              <div class="col-md-5">
+                <label class="micro d-block mb-1">Audio sample — record or upload</label>
+                <div class="clone-sample-row">
+                  <button type="button" class="btn-outline" id="recordBtn">
+                    <i class="fa-solid fa-microphone"></i> Record
+                  </button>
+                  <span class="micro mono" id="recordTimer">0s</span>
+                  <input id="cloneFile" class="direction-input clone-file" type="file"
+                    accept="audio/wav,audio/mpeg,audio/webm,.wav,.mp3,.webm" />
+                </div>
+                <audio id="recordPreview" class="clone-preview" controls style="display:none;"></audio>
+              </div>
+            </div>
+            <label class="micro d-block mb-1 mt-2">Transcription (optional, improves quality)</label>
+            <input id="cloneTranscript" class="direction-input" placeholder="Exactly what is said in the sample…" />
+            <div class="field-foot mt-2">
+              <button type="button" class="btn-outline" id="cloneBtn">
+                <i class="fa-solid fa-clone"></i> Clone voice
+              </button>
+              <span class="micro" id="cloneStatus"></span>
             </div>
           </div>
 

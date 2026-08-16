@@ -89,6 +89,22 @@ history.add = (entry) => {
   if (historyLabel) historyLabel.style.display = "";
 };
 
+// Restore this session's persisted renders (survive reloads and restarts).
+api
+  .getHistory()
+  .then(({ history: rows }) => {
+    // Add oldest-first so the newest ends up on top after each unshift.
+    for (const r of [...rows].reverse()) {
+      history.add({
+        voiceId: r.voiceId,
+        displayName: r.voiceName,
+        audioUrl: r.audioUrl,
+        text: r.text.length > 60 ? r.text.slice(0, 60) + "…" : r.text,
+      });
+    }
+  })
+  .catch(() => {});
+
 // ---- Costs / session stats -----------------------------------------------------
 
 const RATE_PER_MILLION = {
@@ -190,6 +206,9 @@ api
       directionPresets: [...document.querySelectorAll("[data-direction-presets] .pill")],
       enhanceBtn: document.getElementById("enhanceBtn"),
       modelSelect: document.getElementById("modelSelect"),
+      speedInput: document.getElementById("speedInput"),
+      temperatureInput: document.getElementById("tempInput"),
+      deliverySelect: document.getElementById("deliverySelect"),
       dockPlayBtn: document.getElementById("dockPlay"),
       downloadLink: document.getElementById("downloadLink"),
       regenBtn: document.getElementById("regenBtn"),
@@ -206,6 +225,106 @@ api
     });
   })
   .catch((e) => showToast(`Couldn't load voices: ${e.message}`));
+
+// ---- Voice cloning --------------------------------------------------------------
+
+// In-browser mic recording (MediaRecorder → webm). Auto-stops at 15s.
+let recordedBlob = null;
+let mediaRecorder = null;
+let recTimerId = null;
+let recSeconds = 0;
+const recordBtn = document.getElementById("recordBtn");
+const recordTimer = document.getElementById("recordTimer");
+const recordPreview = document.getElementById("recordPreview");
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  clearInterval(recTimerId);
+  if (recordBtn) recordBtn.classList.remove("is-recording");
+}
+
+async function startRecording() {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return showToast("Recording isn't supported in this browser.");
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    return showToast("Microphone access denied.");
+  }
+  const chunks = [];
+  mediaRecorder = new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+  mediaRecorder.onstop = () => {
+    recordedBlob = new Blob(chunks, { type: "audio/webm" });
+    stream.getTracks().forEach((t) => t.stop());
+    if (recordPreview) {
+      recordPreview.src = URL.createObjectURL(recordedBlob);
+      recordPreview.style.display = "";
+    }
+    if (recordBtn) recordBtn.innerHTML = '<i class="fa-solid fa-microphone"></i> Re-record';
+    if (recSeconds < 5) showToast("That sample is short — 5–15s clones best.");
+  };
+  mediaRecorder.start();
+  recSeconds = 0;
+  if (recordTimer) recordTimer.textContent = "0s";
+  if (recordBtn) {
+    recordBtn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
+    recordBtn.classList.add("is-recording");
+  }
+  recTimerId = setInterval(() => {
+    recSeconds += 1;
+    if (recordTimer) recordTimer.textContent = `${recSeconds}s`;
+    if (recSeconds >= 15) stopRecording(); // Inworld trims >15s anyway
+  }, 1000);
+}
+
+recordBtn?.addEventListener("click", () => {
+  if (mediaRecorder && mediaRecorder.state === "recording") stopRecording();
+  else startRecording();
+});
+
+const cloneBtn = document.getElementById("cloneBtn");
+const cloneStatus = document.getElementById("cloneStatus");
+cloneBtn?.addEventListener("click", async () => {
+  // Prefer a fresh recording; fall back to an uploaded file.
+  const file = recordedBlob
+    ? new File([recordedBlob], "recording.webm", { type: "audio/webm" })
+    : document.getElementById("cloneFile")?.files?.[0];
+  const displayName = document.getElementById("cloneName")?.value.trim();
+  const languageCode = document.getElementById("cloneLang")?.value.trim() || "en-US";
+  const transcription = document.getElementById("cloneTranscript")?.value.trim() || "";
+  if (!file) return showToast("Record or upload an audio sample first.");
+  if (!displayName) return showToast("Give the voice a name.");
+
+  cloneBtn.disabled = true;
+  if (cloneStatus) cloneStatus.textContent = "Cloning… this can take a moment.";
+  try {
+    const voice = await api.cloneVoice({ file, displayName, languageCode, transcription });
+    if (cloneStatus) cloneStatus.textContent = `✓ "${voice.displayName}" added. Reloading…`;
+    showToast(`Cloned "${voice.displayName}". It's now in your voice list.`);
+    setTimeout(() => location.reload(), 1200); // rebuild pickers with the new voice
+  } catch (e) {
+    if (cloneStatus) cloneStatus.textContent = "";
+    showToast(`Clone failed: ${e.message}`);
+  } finally {
+    cloneBtn.disabled = false;
+  }
+});
+
+// ---- Delivery control slider labels --------------------------------------------
+
+const speedInput = document.getElementById("speedInput");
+const speedVal = document.getElementById("speedVal");
+speedInput?.addEventListener("input", () => {
+  if (speedVal) speedVal.textContent = `${parseFloat(speedInput.value).toFixed(1)}×`;
+});
+const tempInput = document.getElementById("tempInput");
+const tempVal = document.getElementById("tempVal");
+tempInput?.addEventListener("input", () => {
+  if (tempVal) tempVal.textContent = parseFloat(tempInput.value).toFixed(1);
+});
 
 // ---- Keyboard shortcuts ---------------------------------------------------------
 

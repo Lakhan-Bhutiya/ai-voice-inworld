@@ -13,6 +13,9 @@ export function initComposer({
   directionPresets,
   enhanceBtn,
   modelSelect,
+  speedInput,
+  temperatureInput,
+  deliverySelect,
   dockPlayBtn,
   downloadLink,
   regenBtn,
@@ -47,7 +50,9 @@ export function initComposer({
 
   tagButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
-      insertAtCursor(btn.textContent.trim());
+      // data-insert lets a button show a friendly label but insert something
+      // else (e.g. an SSML <break> tag) — otherwise insert the label itself.
+      insertAtCursor(btn.dataset.insert || btn.textContent.trim());
       btn.classList.remove("chip-pop");
       void btn.offsetWidth; // restart the animation on repeat clicks
       btn.classList.add("chip-pop");
@@ -100,12 +105,19 @@ export function initComposer({
 
     try {
       const modelId = modelSelect?.value || "inworld-tts-1.5-max";
+      const speakingRate = speedInput ? parseFloat(speedInput.value) : 1.0;
+      const temperature = temperatureInput ? parseFloat(temperatureInput.value) : null;
+      const deliveryMode = deliverySelect?.value || null;
       const res = await api.synthesize({
         text,
         voiceId: voice.voiceId,
+        voiceName: voice.displayName,
         modelId,
         description: directionInput?.value.trim() || null,
         audioEncoding: "MP3",
+        speakingRate,
+        temperature,
+        deliveryMode,
       });
       await player.load(res.dataUrl);
       player.play();
@@ -125,6 +137,7 @@ export function initComposer({
         voiceId: voice.voiceId,
         displayName: voice.displayName,
         dataUrl: res.dataUrl,
+        audioUrl: res.audioUrl,  // persisted URL, for replay after reload
         text: text.length > 60 ? text.slice(0, 60) + "…" : text,
       });
     } catch (e) {
@@ -155,12 +168,12 @@ export function initComposer({
   return {
     generate,
     loadHistoryEntry(entry) {
-      player.load(entry.dataUrl).then(() => {
+      player.load(entry.dataUrl || entry.audioUrl).then(() => {
         player.play();
         if (dockMetaLabel) dockMetaLabel.textContent = entry.displayName || "";
         if (dockMetaUsage) dockMetaUsage.textContent = "";
         if (downloadLink) {
-          downloadLink.href = entry.dataUrl;
+          downloadLink.href = entry.dataUrl || entry.audioUrl;
           downloadLink.download = `${entry.displayName || "speech"}.mp3`;
         }
       });

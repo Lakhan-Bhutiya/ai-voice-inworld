@@ -1,6 +1,17 @@
-// Thin wrapper over the backend's 4 endpoints (see /docs or FRONTEND.md).
+// Thin wrapper over the backend endpoints (see /docs or FRONTEND.md).
 // Every function throws a plain Error whose .message is the backend's
 // `detail` string when present, so callers never touch response shape.
+
+// Stable per-browser session id, so history persists across reloads.
+const SESSION_KEY = "aivoice.sessionId";
+export function getSessionId() {
+  let id = localStorage.getItem(SESSION_KEY);
+  if (!id) {
+    id = (crypto.randomUUID?.() || String(Date.now() + Math.random())).replace(/-/g, "");
+    localStorage.setItem(SESSION_KEY, id);
+  }
+  return id;
+}
 
 async function request(path, options) {
   let res;
@@ -30,11 +41,18 @@ export function getVoices() {
   return request("/api/voices");
 }
 
-export function synthesize({ text, voiceId, modelId, description, audioEncoding }) {
+export function synthesize({
+  text, voiceId, voiceName, modelId, description, audioEncoding,
+  speakingRate, temperature, deliveryMode,
+}) {
   return request("/api/synthesize", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, voiceId, modelId, description, audioEncoding }),
+    body: JSON.stringify({
+      text, voiceId, voiceName, modelId, description, audioEncoding,
+      speakingRate, temperature, deliveryMode,
+      sessionId: getSessionId(),
+    }),
   });
 }
 
@@ -44,4 +62,19 @@ export function enhance({ text }) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
   });
+}
+
+export function getHistory() {
+  return request(`/api/history?sessionId=${encodeURIComponent(getSessionId())}`);
+}
+
+// Clone a voice from an audio File/Blob. Returns the new custom voice object.
+export function cloneVoice({ file, displayName, languageCode = "en-US", transcription = "" }) {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("displayName", displayName);
+  form.append("languageCode", languageCode);
+  form.append("transcription", transcription);
+  form.append("sessionId", getSessionId());
+  return request("/api/voices/clone", { method: "POST", body: form });
 }
