@@ -4,7 +4,12 @@ Everything needed to consume the Inworld TTS backend. No keys or Python needed o
 the frontend — just call the HTTP API.
 
 - **Base URL (local):** `http://localhost:8000`
-- **CORS:** open (`*`) — call from any origin (e.g. React on `localhost:3000`).
+- **CORS:** same-origin by default. To call from another host (e.g. React on
+  `localhost:3000`), set `ALLOWED_ORIGINS=http://localhost:3000` in `.env` and
+  send requests with `credentials: "include"`.
+- **Auth:** if `APP_USERNAME`/`APP_PASSWORD` are set in `.env`, every endpoint
+  except `/api/health` and `/api/login` needs the session cookie from
+  `POST /api/login` — otherwise you get `401 {"detail": "Not signed in."}`.
 - **Interactive docs:** `http://localhost:8000/docs`
 
 Audio returns as **base64** + a ready **`dataUrl`** (default MP3). Set it as an
@@ -18,6 +23,15 @@ Audio returns as **base64** + a ready **`dataUrl`** (default MP3). Set it as an
 ```json
 { "status": "ok", "engine": "inworld", "ttsConfigured": true, "enhanceAvailable": true }
 ```
+
+### `POST /api/login` · `POST /api/logout`
+```json
+// request
+{ "username": "admin", "password": "…" }
+// response — also sets the HttpOnly `av_session` cookie
+{ "ok": true, "username": "admin" }
+```
+Wrong credentials → `401 { "detail": "Wrong username or password." }`.
 
 ### `GET /api/voices`
 Proxies Inworld's catalog. Shape (fields may vary):
@@ -56,6 +70,7 @@ Response:
 ```
 `usage` is passed through verbatim from Inworld — the authoritative billed-character count.
 `renderId`/`audioUrl` appear when the render was persisted to session history.
+`usageTotals` (same shape as `GET /api/usage`) carries the refreshed running totals.
 
 ### Session history & custom voices
 - `GET /api/history?sessionId=…` → `{ history: [{ renderId, text, voiceId, voiceName, modelId, audioUrl, charsBilled, createdAt }] }`
@@ -64,13 +79,25 @@ Response:
 - `POST /api/voices/clone` (multipart: `file`, `displayName`, `languageCode`, `transcription?`, `sessionId?`) → clone a voice from a 5–15s sample (wav/mp3/webm, ≤4MB). Cloned voices appear first in `GET /api/voices` with `"custom": true`.
 - `GET /api/voices/custom` · `DELETE /api/voices/custom/{voiceId}`
 
+### `GET /api/usage?sessionId=…`
+Persisted spend — every TTS render and enhance call is priced and stored, so
+these totals survive reloads and restarts.
+```json
+{
+  "session": { "generations": 12, "chars": 8420, "costUsd": 0.0842, "enhances": 3 },
+  "allTime": { "generations": 57, "chars": 41200, "costUsd": 0.412, "enhances": 9 },
+  "byModel": [ { "modelId": "inworld-tts-1.5-max", "generations": 40, "chars": 30000, "costUsd": 0.3 } ]
+}
+```
+`sessionId` is optional; omit it for all-time numbers only.
+
 ### `POST /api/enhance` (optional, needs `OPENAI_API_KEY`)
 Inserts emotion/non-verbal tags into the text via gpt-4o-mini.
 ```json
 // request
 { "text": "I got the job but my friend moved away" }
 // response
-{ "enhanced": "[happy] I got the job [sad] but my friend moved away." }
+{ "enhanced": "[happy] I got the job [sad] but my friend moved away.", "usageTotals": { … } }
 ```
 
 ---

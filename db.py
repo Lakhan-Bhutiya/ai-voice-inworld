@@ -1,12 +1,17 @@
 """
 SQLite persistence for the Inworld TTS POC (via aiosqlite).
 
-Stores two things so sessions survive reloads and restarts:
+Stores everything that should survive reloads and restarts:
   - renders:       every generated clip (text, voice, model, billed chars) keyed
                    by a client-provided sessionId. Audio is saved as a file on
                    disk (data/audio/<id>.mp3); the row keeps its path.
   - custom_voices: voices cloned through Inworld, so they can be listed in the
                    picker alongside the catalog.
+  - usage_events:  one row per billable call (TTS render or OpenAI enhance) with
+                   characters and estimated cost, so the Costs view shows real
+                   running totals instead of an in-memory counter.
+  - app_state:     small key/value store (currently the login-cookie signing
+                   secret, so logins survive a restart).
 """
 
 import time
@@ -40,6 +45,23 @@ CREATE TABLE IF NOT EXISTS custom_voices (
     language_code TEXT,
     session_id    TEXT,
     created_at    REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS usage_events (
+    id            TEXT PRIMARY KEY,
+    session_id    TEXT,
+    kind          TEXT NOT NULL,          -- 'tts' | 'enhance'
+    model_id      TEXT,
+    chars         INTEGER NOT NULL DEFAULT 0,
+    cost_usd      REAL NOT NULL DEFAULT 0,
+    render_id     TEXT,
+    created_at    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_events(session_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS app_state (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
@@ -174,3 +196,91 @@ async def delete_custom_voice(voice_id: str) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+# ---- usage / costs -----------------------------------------------------------
+
+async def log_usage(
+    *, session_id, kind, model_id=None, chars=0, cost_usd=0.0, render_id=None
+) -> None:
+    """Record one billable call so the Costs view survives reloads/restarts."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO usage_events
+               (id, session_id, kind, model_id, chars, cost_usd, render_id, created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (uuid.uuid4().hex, session_id, kind, model_id, chars or 0,
+             cost_usd or 0.0, render_id, time.time()),
+        )
+        await db.commit()
+
+
+_TOTALS_SQL = """
+SELECT
+    COALESCE(SUM(kind = 'tts'), 0)                       AS generations,
+    COALESCE(SUM(CASE WHEN kind = 'tts' THEN chars END), 0)  AS chars,
+    COALESCE(SUM(cost_usd), 0.0)                         AS cost_usd,
+    COALESCE(SUM(kind = 'enhance'), 0)                   AS enhances
+FROM usage_events
+"""
+
+
+async def usage_summary(session_id: str | None = None) -> dict:
+    """Totals for one session plus all-time totals across every session."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+
+        cur = await db.execute(_TOTALS_SQL + " WHERE session_id = ?", (session_id,))
+        session_row = await cur.fetchone()
+
+        cur = await db.execute(_TOTALS_SQL)
+        all_row = await cur.fetchone()
+
+        cur = await db.execute(
+            """SELECT model_id,
+                      COUNT(*) AS generations,
+                      COALESCE(SUM(chars), 0) AS chars,
+                      COALESCE(SUM(cost_usd), 0.0) AS cost_usd
+               FROM usage_events WHERE kind = 'tts' AND model_id IS NOT NULL
+               GROUP BY model_id ORDER BY cost_usd DESC""",
+        )
+        by_model = await cur.fetchall()
+
+    def totals(row) -> dict:
+        return {
+            "generations": row["generations"],
+            "chars": row["chars"],
+            "costUsd": round(row["cost_usd"], 6),
+            "enhances": row["enhances"],
+        }
+
+    return {
+        "session": totals(session_row),
+        "allTime": totals(all_row),
+        "byModel": [
+            {
+                "modelId": r["model_id"],
+                "generations": r["generations"],
+                "chars": r["chars"],
+                "costUsd": round(r["cost_usd"], 6),
+            }
+            for r in by_model
+        ],
+    }
+
+
+# ---- app state (key/value) ---------------------------------------------------
+
+async def get_state(key: str) -> str | None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute("SELECT value FROM app_state WHERE key = ?", (key,))
+        row = await cur.fetchone()
+    return row[0] if row else None
+
+
+async def set_state(key: str, value: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)", (key, value)
+        )
+        await db.commit()

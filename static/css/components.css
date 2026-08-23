@@ -961,3 +961,87 @@
   width: 100%; margin-top: 6px; accent-color: var(--accent, #6c5ce7);
   cursor: pointer;
 }
+
+/* ---- Voice clone: read-aloud prompt ------------------------------------ */
+.clone-read-prompt {
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: rgba(108, 92, 231, 0.08);
+  border: 1px dashed rgba(108, 92, 231, 0.4);
+}
+.read-prompt-text {
+  margin: 6px 0 0; font-family: var(--font-display, inherit);
+  font-size: var(--fs-small, 0.9rem); line-height: 1.5; font-style: italic;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* ---- Sign-in screen ------------------------------------------------------- */
+
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--paper);
+}
+
+.login-card {
+  width: 100%;
+  max-width: 440px;
+  padding: 34px;
+}
+
+.login-mark {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 22px;
+}
+
+.login-title {
+  /* The display size is tuned for a full-width hero; a card wants it smaller. */
+  font-size: clamp(30px, 6vw, 40px);
+  margin-bottom: 26px;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+}
+.login-form .micro {
+  margin-bottom: 7px;
+}
+
+.login-error {
+  color: var(--danger);
+  font-size: var(--fs-small);
+  margin: 14px 0 0;
+}
+
+.login-submit {
+  margin-top: 22px;
+  width: 100%;
+}
+
+.login-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}

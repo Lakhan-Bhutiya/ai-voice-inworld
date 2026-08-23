@@ -1,6 +1,6 @@
-// Session-only generation history — lives in memory, not localStorage or a
-// database, and is labelled as such in the UI. Nothing here survives a
-// reload; that's honest given the backend persists nothing either.
+// The strip of recent generations. The list itself is in-memory, but it's
+// seeded on load from /api/history — the backend stores every render (and its
+// audio) in SQLite, so the entries come back after a reload or a restart.
 
 const MAX_ENTRIES = 20;
 

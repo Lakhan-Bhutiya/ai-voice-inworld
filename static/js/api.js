@@ -20,6 +20,11 @@ async function request(path, options) {
   } catch {
     throw new Error("Can't reach the server. Is it still running?");
   }
+  if (res.status === 401) {
+    // Session cookie expired or missing — back to the sign-in screen.
+    window.location.replace("/login");
+    throw new Error("Not signed in.");
+  }
   if (!res.ok) {
     let detail = res.statusText;
     try {
@@ -60,12 +65,21 @@ export function enhance({ text }) {
   return request("/api/enhance", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, sessionId: getSessionId() }),
   });
 }
 
 export function getHistory() {
   return request(`/api/history?sessionId=${encodeURIComponent(getSessionId())}`);
+}
+
+// Persisted usage totals: this session, all time, and per model.
+export function getUsage() {
+  return request(`/api/usage?sessionId=${encodeURIComponent(getSessionId())}`);
+}
+
+export function logout() {
+  return request("/api/logout", { method: "POST" });
 }
 
 // Clone a voice from an audio File/Blob. Returns the new custom voice object.

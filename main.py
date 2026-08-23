@@ -12,15 +12,16 @@ from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-import db
+load_dotenv()  # before importing auth, which reads the credentials at import time
 
-load_dotenv()
+import auth  # noqa: E402
+import db  # noqa: E402
 
 API_KEY = os.getenv("API_KEY")  # Inworld Base64 key
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -52,19 +53,114 @@ ENHANCE_SYSTEM_PROMPT = (
 
 app = FastAPI(title="AI Voice POC (Inworld)", version="1.0.0")
 
-# Allow a separately-hosted frontend to call this API from any origin (POC).
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The UI is served from this same origin; the login cookie means a wildcard
+# origin would be both unsafe and (with credentials) rejected by browsers.
+# Set ALLOWED_ORIGINS="https://a.example,https://b.example" to host it elsewhere.
+_allowed_origins = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+# Published Inworld rates per 1M characters, used to price each render as it
+# happens (the frontend shows the same numbers on the Costs view).
+RATE_PER_MILLION = {
+    "inworld-tts-1.5-max": 10.0,
+    "inworld-tts-1.5-mini": 15.0,
+    "inworld-tts-2": 5.0,
+}
+DEFAULT_RATE = RATE_PER_MILLION["inworld-tts-1.5-max"]
+
+# gpt-4o-mini enhance calls are tiny; price them off characters in + out at the
+# published $0.15/$0.60 per 1M tokens, assuming ~4 characters per token.
+ENHANCE_RATE_PER_CHAR = (0.15 + 0.60) / 1_000_000 / 4
+
+
+def _tts_cost(model_id: str | None, chars: int | None) -> float:
+    rate = RATE_PER_MILLION.get(model_id or "", DEFAULT_RATE)
+    return (chars or 0) / 1_000_000 * rate
 
 
 @app.on_event("startup")
 async def _startup():
     await db.init()
+    await auth.init()
+    if not auth.enabled():
+        print(
+            "WARNING: APP_USERNAME/APP_PASSWORD are not set in .env — "
+            "the UI is open to anyone who can reach it."
+        )
+
+
+# ---- Login gate --------------------------------------------------------------
+
+# Everything except these needs a valid session cookie. /api/health stays open so
+# the login page can show connection status before you're in.
+PUBLIC_PATHS = {"/login", "/api/login", "/api/health", "/favicon.ico"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if (
+        not auth.enabled()
+        or path in PUBLIC_PATHS
+        or path.startswith("/static/")
+        or request.method == "OPTIONS"
+    ):
+        return await call_next(request)
+
+    if auth.valid_token(request.cookies.get(auth.COOKIE_NAME)):
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Not signed in."}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., max_length=200)
+    password: str = Field(..., max_length=200)
+
+
+@app.get("/login")
+async def login_page(request: Request):
+    """The sign-in screen — skipped entirely if you already have a session."""
+    if not auth.enabled() or auth.valid_token(request.cookies.get(auth.COOKIE_NAME)):
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(BASE_DIR / "static" / "login.html")
+
+
+@app.post("/api/login")
+async def login(req: LoginRequest, response: Response):
+    if not auth.enabled():
+        raise HTTPException(
+            status_code=500,
+            detail="Login is not configured. Add APP_USERNAME and APP_PASSWORD to .env",
+        )
+    if not auth.check_credentials(req.username, req.password):
+        raise HTTPException(status_code=401, detail="Wrong username or password.")
+    response.set_cookie(
+        auth.COOKIE_NAME,
+        auth.make_token(req.username),
+        max_age=auth.SESSION_TTL,
+        httponly=True,
+        samesite="lax",
+    )
+    return {"ok": True, "username": req.username}
+
+
+@app.post("/api/logout")
+async def logout(response: Response):
+    response.delete_cookie(auth.COOKIE_NAME)
+    return {"ok": True}
 
 
 class SynthesizeRequest(BaseModel):
@@ -86,6 +182,8 @@ class SynthesizeRequest(BaseModel):
 
 class EnhanceRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
+    # If provided, the enhance call is counted against this session's usage.
+    sessionId: str | None = None
 
 
 def _auth_headers() -> dict:
@@ -107,6 +205,7 @@ async def health():
         "engine": "inworld",
         "ttsConfigured": bool(API_KEY),
         "enhanceAvailable": bool(OPENAI_API_KEY),
+        "authRequired": auth.enabled(),
     }
 
 
@@ -191,12 +290,15 @@ async def synthesize(req: SynthesizeRequest):
         "usage": data.get("usage"),
     }
 
+    usage = data.get("usage") or {}
+    chars_billed = usage.get("processedCharactersCount")
+    render_id = None
+
     # Persist to this session's history so it survives reloads/restarts.
     if req.sessionId:
         ext = {"MP3": "mp3", "OGG_OPUS": "ogg", "FLAC": "flac"}.get(
             req.audioEncoding, "wav"
         )
-        usage = data.get("usage") or {}
         record = await db.add_render(
             session_id=req.sessionId,
             text=req.text,
@@ -205,11 +307,23 @@ async def synthesize(req: SynthesizeRequest):
             voice_name=req.voiceName,
             model_id=req.modelId,
             description=req.description,
-            chars_billed=usage.get("processedCharactersCount"),
+            chars_billed=chars_billed,
             ext=ext,
         )
-        result["renderId"] = record["renderId"]
+        render_id = record["renderId"]
+        result["renderId"] = render_id
         result["audioUrl"] = record["audioUrl"]
+
+    # Bill it. Logged for every render, session or not, so all-time totals are real.
+    await db.log_usage(
+        session_id=req.sessionId,
+        kind="tts",
+        model_id=req.modelId,
+        chars=chars_billed or 0,
+        cost_usd=_tts_cost(req.modelId, chars_billed),
+        render_id=render_id,
+    )
+    result["usageTotals"] = await db.usage_summary(req.sessionId)
 
     return result
 
@@ -242,7 +356,18 @@ async def enhance(req: EnhanceRequest):
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
     enhanced = resp.json()["choices"][0]["message"]["content"].strip()
-    return {"enhanced": enhanced}
+
+    await db.log_usage(
+        session_id=req.sessionId,
+        kind="enhance",
+        model_id="gpt-4o-mini",
+        chars=len(req.text) + len(enhanced),
+        cost_usd=(len(req.text) + len(enhanced)) * ENHANCE_RATE_PER_CHAR,
+    )
+    return {
+        "enhanced": enhanced,
+        "usageTotals": await db.usage_summary(req.sessionId),
+    }
 
 
 # ---- Session history ---------------------------------------------------------
@@ -252,6 +377,12 @@ async def enhance(req: EnhanceRequest):
 async def get_history(sessionId: str, limit: int = 50):
     """Past renders for a browser session (newest first), for restore on reload."""
     return {"history": await db.list_renders(sessionId, limit)}
+
+
+@app.get("/api/usage")
+async def get_usage(sessionId: str | None = None):
+    """Persisted spend: this session's totals, all-time totals, and per-model."""
+    return await db.usage_summary(sessionId)
 
 
 @app.get("/api/audio/{render_id}")

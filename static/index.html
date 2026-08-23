@@ -46,9 +46,14 @@
 
         <div class="app-topbar">
           <span class="micro">Inworld TTS · Proof of concept</span>
-          <div class="status-chip" role="status" aria-live="polite">
-            <span class="status-dot" id="statusDot"></span>
-            <span id="statusText">Checking…</span>
+          <div class="topbar-right">
+            <div class="status-chip" role="status" aria-live="polite">
+              <span class="status-dot" id="statusDot"></span>
+              <span id="statusText">Checking…</span>
+            </div>
+            <button type="button" class="btn-outline" id="logoutBtn" hidden>
+              <i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i> Sign out
+            </button>
           </div>
         </div>
 
@@ -248,7 +253,12 @@
                 <audio id="recordPreview" class="clone-preview" controls style="display:none;"></audio>
               </div>
             </div>
-            <label class="micro d-block mb-1 mt-2">Transcription (optional, improves quality)</label>
+            <div class="clone-read-prompt" id="readPrompt">
+              <span class="micro"><i class="fa-solid fa-book-open"></i> For the best match, read this aloud clearly while recording:</span>
+              <p class="read-prompt-text" id="readPromptText"></p>
+            </div>
+
+            <label class="micro d-block mb-1 mt-2">Transcription — the exact words in your sample (auto-filled if you read the line above)</label>
             <input id="cloneTranscript" class="direction-input" placeholder="Exactly what is said in the sample…" />
             <div class="field-foot mt-2">
               <button type="button" class="btn-outline" id="cloneBtn">
@@ -281,8 +291,9 @@
               <h1 class="hero-line">What this<br><span class="accent-mark">actually costs.</span></h1>
             </div>
             <div>
-              <p class="hero-sub">Real published rates, and a running total for what you've generated
-                this session nothing here is estimated after the fact.</p>
+              <p class="hero-sub">Real published rates, and a running total for what you've generated.
+                Every call is priced and stored server-side, so these totals survive a reload,
+                a new tab, or a restart nothing here is estimated after the fact.</p>
             </div>
           </div>
 
@@ -302,6 +313,25 @@
             <div class="stat-tile">
               <span class="micro">This session · enhance calls</span>
               <div class="stat-tile-value mono" id="statEnhances">0</div>
+            </div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat-tile">
+              <span class="micro">All time · generations</span>
+              <div class="stat-tile-value mono" id="statAllGenerations">0</div>
+            </div>
+            <div class="stat-tile">
+              <span class="micro">All time · characters billed</span>
+              <div class="stat-tile-value mono" id="statAllChars">0</div>
+            </div>
+            <div class="stat-tile">
+              <span class="micro">All time · est. cost</span>
+              <div class="stat-tile-value mono" id="statAllCost">$0.00</div>
+            </div>
+            <div class="stat-tile">
+              <span class="micro">All time · enhance calls</span>
+              <div class="stat-tile-value mono" id="statAllEnhances">0</div>
             </div>
           </div>
 

@@ -38,9 +38,22 @@ function showToast(message) {
 const statusDot = document.getElementById("statusDot");
 const statusText = document.getElementById("statusText");
 
+const logoutBtn = document.getElementById("logoutBtn");
+logoutBtn?.addEventListener("click", async () => {
+  logoutBtn.disabled = true;
+  try {
+    await api.logout();
+  } catch {
+    /* clearing the cookie failed; the sign-in page will say so */
+  }
+  window.location.replace("/login");
+});
+
 api
   .getHealth()
   .then((data) => {
+    // Only offer sign-out when the backend actually has a login configured.
+    if (logoutBtn) logoutBtn.hidden = !data.authRequired;
     if (!statusDot || !statusText) return;
     if (data.ttsConfigured) {
       statusDot.className = "status-dot ok";
@@ -76,7 +89,7 @@ const player = createPlayer({
 });
 const ripple = createRipple(document.getElementById("rippleCanvas"));
 
-// ---- Session history (in-memory only) ------------------------------------------
+// ---- Session history ------------------------------------------
 
 const history = createHistory({
   container: document.getElementById("historyStrip"),
@@ -114,31 +127,46 @@ const RATE_PER_MILLION = {
 };
 
 const stats = { generations: 0, chars: 0, costUsd: 0, enhances: 0 };
-const statGenerations = document.getElementById("statGenerations");
-const statChars = document.getElementById("statChars");
-const statCost = document.getElementById("statCost");
-const statEnhances = document.getElementById("statEnhances");
+const allTime = { generations: 0, chars: 0, costUsd: 0, enhances: 0 };
+
+const statEls = {
+  generations: document.getElementById("statGenerations"),
+  chars: document.getElementById("statChars"),
+  cost: document.getElementById("statCost"),
+  enhances: document.getElementById("statEnhances"),
+  allGenerations: document.getElementById("statAllGenerations"),
+  allChars: document.getElementById("statAllChars"),
+  allCost: document.getElementById("statAllCost"),
+  allEnhances: document.getElementById("statAllEnhances"),
+};
 
 function renderStats() {
-  if (statGenerations) statGenerations.textContent = String(stats.generations);
-  if (statChars) statChars.textContent = stats.chars.toLocaleString();
-  if (statCost) statCost.textContent = `$${stats.costUsd.toFixed(4)}`;
-  if (statEnhances) statEnhances.textContent = String(stats.enhances);
+  if (statEls.generations) statEls.generations.textContent = String(stats.generations);
+  if (statEls.chars) statEls.chars.textContent = stats.chars.toLocaleString();
+  if (statEls.cost) statEls.cost.textContent = `$${stats.costUsd.toFixed(4)}`;
+  if (statEls.enhances) statEls.enhances.textContent = String(stats.enhances);
+  if (statEls.allGenerations) statEls.allGenerations.textContent = String(allTime.generations);
+  if (statEls.allChars) statEls.allChars.textContent = allTime.chars.toLocaleString();
+  if (statEls.allCost) statEls.allCost.textContent = `$${allTime.costUsd.toFixed(4)}`;
+  if (statEls.allEnhances) statEls.allEnhances.textContent = String(allTime.enhances);
 }
 renderStats();
 
-function recordUsage(usage) {
-  if (!usage || typeof usage.processedCharactersCount !== "number") return;
-  stats.generations += 1;
-  stats.chars += usage.processedCharactersCount;
-  const rate = RATE_PER_MILLION[usage.modelId] ?? RATE_PER_MILLION["inworld-tts-1.5-max"];
-  stats.costUsd += (usage.processedCharactersCount / 1_000_000) * rate;
+// Totals come from the backend, which logs every billable call to SQLite — so
+// they're the same numbers after a reload, a restart, or a new browser tab.
+function applyTotals(totals) {
+  if (!totals) return;
+  Object.assign(stats, totals.session);
+  Object.assign(allTime, totals.allTime);
   renderStats();
 }
-function recordEnhance() {
-  stats.enhances += 1;
-  renderStats();
-}
+
+api.getUsage().then(applyTotals).catch(() => {});
+
+// The synthesize/enhance responses carry the refreshed totals with them, so a
+// generation updates the Costs view without a second round trip.
+const recordUsage = applyTotals;
+const recordEnhance = applyTotals;
 
 const calcChars = document.getElementById("calcChars");
 const calcResults = document.getElementById("calcResults");
@@ -228,14 +256,68 @@ api
 
 // ---- Voice cloning --------------------------------------------------------------
 
-// In-browser mic recording (MediaRecorder → webm). Auto-stops at 15s.
-let recordedBlob = null;
+// In-browser mic recording. The raw MediaRecorder output is lossy webm/opus,
+// which clones poorly — so we decode it and re-encode to clean 16-bit PCM WAV
+// (mono, 24 kHz) before upload. We also show a fixed line to read aloud and use
+// it as the transcription, which markedly improves clone fidelity.
+// ~11-13s read aloud — stays under Inworld's 15s trim so audio and transcript match.
+const READ_PROMPT =
+  "I enjoy reading a good book on a quiet Sunday morning, and I often take a long " +
+  "walk by the river whenever the weather turns nice and warm.";
+
+let recordedBlob = null;       // a WAV blob once recording finishes
+let recordedIsFromMic = false; // vs. an uploaded file
 let mediaRecorder = null;
 let recTimerId = null;
 let recSeconds = 0;
 const recordBtn = document.getElementById("recordBtn");
 const recordTimer = document.getElementById("recordTimer");
 const recordPreview = document.getElementById("recordPreview");
+const readPromptText = document.getElementById("readPromptText");
+if (readPromptText) readPromptText.textContent = READ_PROMPT;
+
+// Encode an AudioBuffer's first channel as a 16-bit PCM mono WAV blob.
+function encodeWav(audioBuffer, sampleRate) {
+  const samples = audioBuffer.getChannelData(0);
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);           // PCM
+  view.setUint16(22, 1, true);           // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  let off = 44;
+  for (let i = 0; i < samples.length; i++, off += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return new Blob([view], { type: "audio/wav" });
+}
+
+// Decode a recorded blob and resample to clean mono 24 kHz WAV.
+async function toCleanWav(blob) {
+  const arrayBuf = await blob.arrayBuffer();
+  const tmp = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await tmp.decodeAudioData(arrayBuf);
+  await tmp.close();
+  const rate = 24000;
+  const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * rate), rate);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start();
+  const rendered = await offline.startRendering();
+  return encodeWav(rendered, rate);
+}
 
 function stopRecording() {
   if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
@@ -249,22 +331,36 @@ async function startRecording() {
   }
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Preserve the true voice: keep echo cancellation / AGC off, light noise suppression.
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: false,
+        autoGainControl: false,
+        noiseSuppression: true,
+      },
+    });
   } catch {
     return showToast("Microphone access denied.");
   }
   const chunks = [];
-  mediaRecorder = new MediaRecorder(stream);
+  mediaRecorder = new MediaRecorder(stream, { audioBitsPerSecond: 128000 });
   mediaRecorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  mediaRecorder.onstop = () => {
-    recordedBlob = new Blob(chunks, { type: "audio/webm" });
+  mediaRecorder.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
-    if (recordPreview) {
-      recordPreview.src = URL.createObjectURL(recordedBlob);
-      recordPreview.style.display = "";
-    }
     if (recordBtn) recordBtn.innerHTML = '<i class="fa-solid fa-microphone"></i> Re-record';
-    if (recSeconds < 5) showToast("That sample is short — 5–15s clones best.");
+    try {
+      recordedBlob = await toCleanWav(new Blob(chunks, { type: "audio/webm" }));
+      recordedIsFromMic = true;
+      if (recordPreview) {
+        recordPreview.src = URL.createObjectURL(recordedBlob);
+        recordPreview.style.display = "";
+      }
+    } catch {
+      showToast("Couldn't process the recording — try uploading a WAV instead.");
+      recordedBlob = null;
+    }
+    if (recSeconds < 5) showToast("That sample is short — read the full line (5–15s) for a better clone.");
   };
   mediaRecorder.start();
   recSeconds = 0;
@@ -276,7 +372,7 @@ async function startRecording() {
   recTimerId = setInterval(() => {
     recSeconds += 1;
     if (recordTimer) recordTimer.textContent = `${recSeconds}s`;
-    if (recSeconds >= 15) stopRecording(); // Inworld trims >15s anyway
+    if (recSeconds >= 20) stopRecording();
   }, 1000);
 }
 
@@ -288,13 +384,15 @@ recordBtn?.addEventListener("click", () => {
 const cloneBtn = document.getElementById("cloneBtn");
 const cloneStatus = document.getElementById("cloneStatus");
 cloneBtn?.addEventListener("click", async () => {
-  // Prefer a fresh recording; fall back to an uploaded file.
+  // Prefer a fresh recording (already clean WAV); fall back to an uploaded file.
   const file = recordedBlob
-    ? new File([recordedBlob], "recording.webm", { type: "audio/webm" })
+    ? new File([recordedBlob], "recording.wav", { type: "audio/wav" })
     : document.getElementById("cloneFile")?.files?.[0];
   const displayName = document.getElementById("cloneName")?.value.trim();
   const languageCode = document.getElementById("cloneLang")?.value.trim() || "en-US";
-  const transcription = document.getElementById("cloneTranscript")?.value.trim() || "";
+  // If they recorded and left transcription blank, assume they read the prompt.
+  let transcription = document.getElementById("cloneTranscript")?.value.trim() || "";
+  if (!transcription && recordedIsFromMic) transcription = READ_PROMPT;
   if (!file) return showToast("Record or upload an audio sample first.");
   if (!displayName) return showToast("Give the voice a name.");
 
