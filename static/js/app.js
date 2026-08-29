@@ -5,6 +5,10 @@ import { createPlayer } from "./player.js";
 import { createRipple } from "./ripple.js";
 import { createHistory } from "./history.js";
 import { initComposer } from "./composer.js";
+import { createSegmented } from "./segmented.js";
+import { initClone } from "./clone.js";
+import { createPreviewController } from "./preview.js";
+import { RATE_PER_MILLION, costFor } from "./pricing.js";
 
 initTheme();
 
@@ -55,6 +59,12 @@ api
     if (statusText) statusText.textContent = "Offline";
   });
 
+function updateVoiceCounts(delta) {
+  document.querySelectorAll("#voiceCountStudio, #voiceCountVoices").forEach((el) => {
+    el.textContent = String(Math.max(0, Number(el.textContent) + delta));
+  });
+}
+
 function setBusy(busy) {
   if (!statusDot || !statusText) return;
   if (busy) {
@@ -75,43 +85,39 @@ const player = createPlayer({
   timeTotal: document.getElementById("timeTotal"),
 });
 const ripple = createRipple(document.getElementById("rippleCanvas"));
+const previewController = createPreviewController({ onError: showToast });
 
-// ---- Session history (in-memory only) ------------------------------------------
+// ---- Session history (server-persisted) ----------------------------------------
 
 const history = createHistory({
   container: document.getElementById("historyStrip"),
+  filterBar: document.getElementById("historyFilterBar"),
   onSelect: (entry) => composer.loadHistoryEntry(entry),
-});
-const historyLabel = document.getElementById("historyLabel");
-const origHistoryAdd = history.add.bind(history);
-history.add = (entry) => {
-  origHistoryAdd(entry);
-  if (historyLabel) historyLabel.style.display = "";
-};
-
-// Restore this session's persisted renders (survive reloads and restarts).
-api
-  .getHistory()
-  .then(({ history: rows }) => {
-    // Add oldest-first so the newest ends up on top after each unshift.
-    for (const r of [...rows].reverse()) {
-      history.add({
-        voiceId: r.voiceId,
-        displayName: r.voiceName,
-        audioUrl: r.audioUrl,
-        text: r.text.length > 60 ? r.text.slice(0, 60) + "…" : r.text,
-      });
+  onDelete: async (entry) => {
+    if (!entry.renderId) return;
+    try {
+      await api.deleteHistoryEntry(entry.renderId);
+      history.remove(entry.renderId);
+      refreshStats();
+    } catch (e) {
+      showToast(`Couldn't delete: ${e.message}`);
     }
-  })
-  .catch(() => {});
+  },
+  onToggleLike: async (entry) => {
+    if (!entry.renderId) return null;
+    try {
+      return await api.toggleLike({ itemType: "render", itemId: entry.renderId });
+    } catch (e) {
+      showToast(`Couldn't toggle like: ${e.message}`);
+      return null;
+    }
+  },
+});
 
 // ---- Costs / session stats -----------------------------------------------------
-
-const RATE_PER_MILLION = {
-  "inworld-tts-1.5-max": 10,
-  "inworld-tts-1.5-mini": 15,
-  "inworld-tts-2": 5,
-};
+// Derived live from the server's render + enhance-call records, not an
+// in-memory counter — so the Costs view stays correct across reloads and
+// after cloning a voice (which no longer force-reloads the page at all).
 
 const stats = { generations: 0, chars: 0, costUsd: 0, enhances: 0 };
 const statGenerations = document.getElementById("statGenerations");
@@ -127,18 +133,44 @@ function renderStats() {
 }
 renderStats();
 
-function recordUsage(usage) {
-  if (!usage || typeof usage.processedCharactersCount !== "number") return;
-  stats.generations += 1;
-  stats.chars += usage.processedCharactersCount;
-  const rate = RATE_PER_MILLION[usage.modelId] ?? RATE_PER_MILLION["inworld-tts-1.5-max"];
-  stats.costUsd += (usage.processedCharactersCount / 1_000_000) * rate;
+function applyHistoryStats(rows, enhanceCount) {
+  stats.generations = rows.length;
+  stats.chars = rows.reduce((sum, r) => sum + (r.charsBilled || 0), 0);
+  stats.costUsd = rows.reduce((sum, r) => sum + costFor(r.charsBilled || 0, r.modelId), 0);
+  stats.enhances = enhanceCount || 0;
   renderStats();
 }
-function recordEnhance() {
-  stats.enhances += 1;
-  renderStats();
+
+async function refreshStats() {
+  try {
+    const { history: rows, enhanceCount } = await api.getHistory();
+    applyHistoryStats(rows, enhanceCount);
+  } catch {
+    /* keep last-known stats on a transient failure */
+  }
 }
+
+// Restore this session's persisted renders (survive reloads and restarts)
+// and seed the Costs stats from the same fetch.
+api
+  .getHistory()
+  .then(({ history: rows, enhanceCount, likedRenderIds }) => {
+    // Add oldest-first so the newest ends up on top after each unshift.
+    for (const r of [...rows].reverse()) {
+      history.add({
+        renderId: r.renderId,
+        voiceId: r.voiceId,
+        displayName: r.voiceName,
+        audioUrl: r.audioUrl,
+        text: r.text.length > 60 ? r.text.slice(0, 60) + "…" : r.text,
+      });
+    }
+    if (likedRenderIds?.length) {
+      history.setLikedIds(likedRenderIds);
+    }
+    applyHistoryStats(rows, enhanceCount);
+  })
+  .catch(() => {});
 
 const calcChars = document.getElementById("calcChars");
 const calcResults = document.getElementById("calcResults");
@@ -146,8 +178,8 @@ function renderCalc() {
   if (!calcChars || !calcResults) return;
   const n = Math.max(0, Number(calcChars.value) || 0);
   calcResults.innerHTML = "";
-  for (const [modelId, rate] of Object.entries(RATE_PER_MILLION)) {
-    const cost = (n / 1_000_000) * rate;
+  for (const modelId of Object.keys(RATE_PER_MILLION)) {
+    const cost = costFor(n, modelId);
     const span = document.createElement("span");
     span.className = "calc-result";
     const b = document.createElement("b");
@@ -159,28 +191,98 @@ function renderCalc() {
 calcChars?.addEventListener("input", renderCalc);
 renderCalc();
 
+// ---- Advanced delivery controls (Model / Delivery segmented pickers) -----------
+// Built ahead of the voice catalog fetch — they don't depend on it — then
+// threaded into the composer once it's constructed below.
+
+const modelControl = createSegmented({
+  container: document.getElementById("modelSeg"),
+  options: [
+    { value: "inworld-tts-1.5-max", label: "1.5-max" },
+    { value: "inworld-tts-1.5-mini", label: "1.5-mini" },
+    { value: "inworld-tts-2", label: "tts-2" },
+  ],
+  value: "inworld-tts-1.5-max",
+});
+const deliveryControl = createSegmented({
+  container: document.getElementById("deliverySeg"),
+  options: [
+    { value: "", label: "Default" },
+    { value: "STABLE", label: "Stable" },
+    { value: "BALANCED", label: "Balanced" },
+    { value: "CREATIVE", label: "Creative" },
+  ],
+  value: "",
+});
+
 // ---- Voice catalog + two synced pickers ----------------------------------------
 
-let composer = { loadHistoryEntry: () => {}, generate: () => {} };
+let composer = { loadHistoryEntry: () => {}, generate: () => {}, onVoiceChanged: () => {} };
+let pickers = [];
+let broadcastSelectionRef = () => {}; // set once pickers exist; used by clone.js's "Use this voice"
 
 api
   .getVoices()
-  .then((data) => {
+  .then(async (data) => {
     const voices = data?.voices || data?.result || [];
     if (!Array.isArray(voices) || !voices.length) {
       showToast("No voices returned by the catalog.");
       return;
     }
 
-    const pickers = [];
+    document.querySelectorAll("#voiceCountStudio, #voiceCountVoices").forEach((el) => {
+      el.textContent = String(voices.length);
+    });
+
     function broadcastSelection(voice) {
       for (const p of pickers) if (p.setSelected) p.setSelected(voice.voiceId);
-      // Audio already exists for this session — treat a voice change as
-      // "redo this line in the new voice" rather than requiring an explicit
-      // regenerate click. Before any first generation (dormant), there's no
-      // audio to update, so just record the selection and don't bill yet.
-      if (!player.isDormant()) composer.generate();
+      // A voice switch no longer auto-regenerates: that used to bill a real
+      // Inworld render on every click while browsing voices. It just updates
+      // the dock so a regenerate is one explicit click away.
+      composer.onVoiceChanged(voice);
     }
+    broadcastSelectionRef = broadcastSelection;
+
+    function onPreview(voice, btn, modelId) {
+      previewController.toggle(voice, btn, modelId);
+    }
+
+    async function onDeleteVoice(voice) {
+      try {
+        await api.deleteCustomVoice(voice.voiceId);
+        let fallback = null;
+        for (const p of pickers) fallback = p.removeVoice(voice.voiceId) || fallback;
+        if (fallback) composer.onVoiceChanged(fallback);
+        updateVoiceCounts(-1);
+        showToast(`Deleted "${voice.displayName}".`);
+        return true;
+      } catch (e) {
+        showToast(`Couldn't delete: ${e.message}`);
+        return false;
+      }
+    }
+
+    async function onToggleLike(voice) {
+      try {
+        const result = await api.toggleLike({ itemType: "voice", itemId: voice.voiceId });
+        // Sync the other picker's liked state
+        for (const p of pickers) {
+          // Each picker manages its own internal likedIds via the button click handler,
+          // but we need to re-render the *other* picker to reflect the change.
+        }
+        return result;
+      } catch (e) {
+        showToast(`Couldn't toggle like: ${e.message}`);
+        return null;
+      }
+    }
+
+    // Fetch liked voice IDs for initial render
+    let initialLikedVoiceIds = [];
+    try {
+      const likesData = await api.getLikes("voice");
+      initialLikedVoiceIds = likesData?.likes || [];
+    } catch { /* proceed without liked state */ }
 
     const studioPicker = createVoicePicker({
       root: document.getElementById("studioVoicePanel"),
@@ -188,6 +290,33 @@ api
       mode: "list",
       initialSelectedId: voices[0].voiceId,
       onSelect: broadcastSelection,
+      onPreview,
+      onDeleteVoice,
+      onToggleLike: async (voice) => {
+        const result = await onToggleLike(voice);
+        if (result) {
+          // Sync the other picker — find all like buttons for this voice and update them
+          for (const p of pickers) {
+            if (p !== studioPicker) {
+              const ids = result.liked
+                ? [...initialLikedVoiceIds, voice.voiceId]
+                : initialLikedVoiceIds.filter((id) => id !== voice.voiceId);
+              // We'll just re-set on both pickers after the toggle
+            }
+          }
+          // Update the shared tracked set
+          if (result.liked) {
+            if (!initialLikedVoiceIds.includes(voice.voiceId)) initialLikedVoiceIds.push(voice.voiceId);
+          } else {
+            initialLikedVoiceIds = initialLikedVoiceIds.filter((id) => id !== voice.voiceId);
+          }
+          // Sync all pickers
+          for (const p of pickers) p.setLikedIds(initialLikedVoiceIds);
+        }
+        return result;
+      },
+      getModelId: () => modelControl.getValue(),
+      initialLikedIds: initialLikedVoiceIds,
     });
     const gridPicker = createVoicePicker({
       root: document.getElementById("voicesGridPanel"),
@@ -195,8 +324,24 @@ api
       mode: "grid",
       initialSelectedId: voices[0].voiceId,
       onSelect: broadcastSelection,
+      onPreview,
+      onDeleteVoice,
+      onToggleLike: async (voice) => {
+        const result = await onToggleLike(voice);
+        if (result) {
+          if (result.liked) {
+            if (!initialLikedVoiceIds.includes(voice.voiceId)) initialLikedVoiceIds.push(voice.voiceId);
+          } else {
+            initialLikedVoiceIds = initialLikedVoiceIds.filter((id) => id !== voice.voiceId);
+          }
+          for (const p of pickers) p.setLikedIds(initialLikedVoiceIds);
+        }
+        return result;
+      },
+      getModelId: () => modelControl.getValue(),
+      initialLikedIds: initialLikedVoiceIds,
     });
-    pickers.push(studioPicker, gridPicker);
+    pickers = [studioPicker, gridPicker];
 
     composer = initComposer({
       scriptEl: document.getElementById("scriptText"),
@@ -205,125 +350,65 @@ api
       directionInput: document.getElementById("directionInput"),
       directionPresets: [...document.querySelectorAll("[data-direction-presets] .pill")],
       enhanceBtn: document.getElementById("enhanceBtn"),
-      modelSelect: document.getElementById("modelSelect"),
+      modelControl,
+      deliveryControl,
       speedInput: document.getElementById("speedInput"),
       temperatureInput: document.getElementById("tempInput"),
-      deliverySelect: document.getElementById("deliverySelect"),
+      advancedSummary: document.getElementById("advancedSummary"),
       dockPlayBtn: document.getElementById("dockPlay"),
       downloadLink: document.getElementById("downloadLink"),
       regenBtn: document.getElementById("regenBtn"),
       dockMetaLabel: document.getElementById("dockMetaLabel"),
       dockMetaUsage: document.getElementById("dockMetaUsage"),
+      dockMetaEstimate: document.getElementById("dockMetaEstimate"),
       getVoice: () => studioPicker.getSelected(),
       player,
       ripple,
       history,
       setBusy,
       onError: showToast,
-      onUsage: recordUsage,
-      onEnhanceUsed: recordEnhance,
+      onUsage: () => refreshStats(),
+      onEnhanceUsed: () => refreshStats(),
     });
   })
   .catch((e) => showToast(`Couldn't load voices: ${e.message}`));
 
 // ---- Voice cloning --------------------------------------------------------------
 
-// In-browser mic recording (MediaRecorder → webm). Auto-stops at 15s.
-let recordedBlob = null;
-let mediaRecorder = null;
-let recTimerId = null;
-let recSeconds = 0;
-const recordBtn = document.getElementById("recordBtn");
-const recordTimer = document.getElementById("recordTimer");
-const recordPreview = document.getElementById("recordPreview");
-
-function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
-  clearInterval(recTimerId);
-  if (recordBtn) recordBtn.classList.remove("is-recording");
-}
-
-async function startRecording() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    return showToast("Recording isn't supported in this browser.");
-  }
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch {
-    return showToast("Microphone access denied.");
-  }
-  const chunks = [];
-  mediaRecorder = new MediaRecorder(stream);
-  mediaRecorder.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-  mediaRecorder.onstop = () => {
-    recordedBlob = new Blob(chunks, { type: "audio/webm" });
-    stream.getTracks().forEach((t) => t.stop());
-    if (recordPreview) {
-      recordPreview.src = URL.createObjectURL(recordedBlob);
-      recordPreview.style.display = "";
-    }
-    if (recordBtn) recordBtn.innerHTML = '<i class="fa-solid fa-microphone"></i> Re-record';
-    if (recSeconds < 5) showToast("That sample is short — 5–15s clones best.");
-  };
-  mediaRecorder.start();
-  recSeconds = 0;
-  if (recordTimer) recordTimer.textContent = "0s";
-  if (recordBtn) {
-    recordBtn.innerHTML = '<i class="fa-solid fa-stop"></i> Stop';
-    recordBtn.classList.add("is-recording");
-  }
-  recTimerId = setInterval(() => {
-    recSeconds += 1;
-    if (recordTimer) recordTimer.textContent = `${recSeconds}s`;
-    if (recSeconds >= 15) stopRecording(); // Inworld trims >15s anyway
-  }, 1000);
-}
-
-recordBtn?.addEventListener("click", () => {
-  if (mediaRecorder && mediaRecorder.state === "recording") stopRecording();
-  else startRecording();
-});
-
-const cloneBtn = document.getElementById("cloneBtn");
-const cloneStatus = document.getElementById("cloneStatus");
-cloneBtn?.addEventListener("click", async () => {
-  // Prefer a fresh recording; fall back to an uploaded file.
-  const file = recordedBlob
-    ? new File([recordedBlob], "recording.webm", { type: "audio/webm" })
-    : document.getElementById("cloneFile")?.files?.[0];
-  const displayName = document.getElementById("cloneName")?.value.trim();
-  const languageCode = document.getElementById("cloneLang")?.value.trim() || "en-US";
-  const transcription = document.getElementById("cloneTranscript")?.value.trim() || "";
-  if (!file) return showToast("Record or upload an audio sample first.");
-  if (!displayName) return showToast("Give the voice a name.");
-
-  cloneBtn.disabled = true;
-  if (cloneStatus) cloneStatus.textContent = "Cloning… this can take a moment.";
-  try {
-    const voice = await api.cloneVoice({ file, displayName, languageCode, transcription });
-    if (cloneStatus) cloneStatus.textContent = `✓ "${voice.displayName}" added. Reloading…`;
+initClone({
+  recordBtn: document.getElementById("recordBtn"),
+  recMeter: document.getElementById("recMeter"),
+  recordTimer: document.getElementById("recordTimer"),
+  fileDrop: document.getElementById("fileDrop"),
+  fileInput: document.getElementById("cloneFile"),
+  fileDropIdle: document.getElementById("fileDropIdle"),
+  fileDropFilled: document.getElementById("fileDropFilled"),
+  fileDropName: document.getElementById("fileDropName"),
+  fileDropSize: document.getElementById("fileDropSize"),
+  fileDropRemove: document.getElementById("fileDropRemove"),
+  previewBlock: document.getElementById("clonePreviewBlock"),
+  previewPlayBtn: document.getElementById("clonePreviewPlay"),
+  previewWave: document.getElementById("clonePreviewWave"),
+  previewTime: document.getElementById("clonePreviewTime"),
+  previewDuration: document.getElementById("clonePreviewDuration"),
+  rerecordBtn: document.getElementById("cloneRerecordBtn"),
+  nameInput: document.getElementById("cloneName"),
+  langInput: document.getElementById("cloneLang"),
+  transcriptInput: document.getElementById("cloneTranscript"),
+  cloneBtn: document.getElementById("cloneBtn"),
+  cloneStatus: document.getElementById("cloneStatus"),
+  successActions: document.getElementById("cloneSuccessActions"),
+  successPreviewBtn: document.getElementById("cloneSuccessPreview"),
+  successUseBtn: document.getElementById("cloneSuccessUse"),
+  offcanvasEl: document.getElementById("cloneOffcanvas"),
+  onError: showToast,
+  onCloned: (voice) => {
     showToast(`Cloned "${voice.displayName}". It's now in your voice list.`);
-    setTimeout(() => location.reload(), 1200); // rebuild pickers with the new voice
-  } catch (e) {
-    if (cloneStatus) cloneStatus.textContent = "";
-    showToast(`Clone failed: ${e.message}`);
-  } finally {
-    cloneBtn.disabled = false;
-  }
-});
-
-// ---- Delivery control slider labels --------------------------------------------
-
-const speedInput = document.getElementById("speedInput");
-const speedVal = document.getElementById("speedVal");
-speedInput?.addEventListener("input", () => {
-  if (speedVal) speedVal.textContent = `${parseFloat(speedInput.value).toFixed(1)}×`;
-});
-const tempInput = document.getElementById("tempInput");
-const tempVal = document.getElementById("tempVal");
-tempInput?.addEventListener("input", () => {
-  if (tempVal) tempVal.textContent = parseFloat(tempInput.value).toFixed(1);
+    for (const p of pickers) p.addVoice?.(voice);
+    updateVoiceCounts(1);
+  },
+  onPreviewRequest: (voice, btn) => previewController.toggle(voice, btn, modelControl.getValue()),
+  onUseVoice: (voice) => broadcastSelectionRef(voice),
 });
 
 // ---- Keyboard shortcuts ---------------------------------------------------------

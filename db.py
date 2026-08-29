@@ -1,12 +1,16 @@
 """
 SQLite persistence for the Inworld TTS POC (via aiosqlite).
 
-Stores two things so sessions survive reloads and restarts:
+Stores three things so sessions survive reloads and restarts:
   - renders:       every generated clip (text, voice, model, billed chars) keyed
                    by a client-provided sessionId. Audio is saved as a file on
                    disk (data/audio/<id>.mp3); the row keeps its path.
   - custom_voices: voices cloned through Inworld, so they can be listed in the
-                   picker alongside the catalog.
+                   picker alongside the catalog immediately (Inworld's own
+                   catalog is cached in-process and won't show a new clone
+                   until the next cache refresh/restart).
+  - enhance_calls: one row per OpenAI Enhance call, so the Costs view's
+                   "enhance calls" stat survives reloads too.
 """
 
 import time
@@ -41,6 +45,23 @@ CREATE TABLE IF NOT EXISTS custom_voices (
     session_id    TEXT,
     created_at    REAL NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS enhance_calls (
+    id            TEXT PRIMARY KEY,
+    session_id    TEXT NOT NULL,
+    created_at    REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_enhance_session ON enhance_calls(session_id);
+
+CREATE TABLE IF NOT EXISTS likes (
+    id            TEXT PRIMARY KEY,
+    session_id    TEXT NOT NULL,
+    item_type     TEXT NOT NULL,
+    item_id       TEXT NOT NULL,
+    created_at    REAL NOT NULL,
+    UNIQUE(session_id, item_type, item_id)
+);
+CREATE INDEX IF NOT EXISTS idx_likes_session ON likes(session_id, item_type);
 """
 
 
@@ -161,7 +182,9 @@ async def list_custom_voices() -> list[dict]:
             "voiceId": r["voice_id"],
             "displayName": r["display_name"],
             "languages": [r["language_code"]] if r["language_code"] else [],
-            "custom": True,
+            "description": None,
+            "tags": [],
+            "isCustom": True,
         }
         for r in rows
     ]
@@ -174,3 +197,57 @@ async def delete_custom_voice(voice_id: str) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+
+
+# ---- enhance calls -------------------------------------------------------
+
+async def add_enhance_call(session_id: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO enhance_calls (id, session_id, created_at) VALUES (?,?,?)",
+            (uuid.uuid4().hex, session_id, time.time()),
+        )
+        await db.commit()
+
+
+async def count_enhance_calls(session_id: str) -> int:
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COUNT(*) FROM enhance_calls WHERE session_id = ?", (session_id,)
+        )
+        row = await cur.fetchone()
+    return row[0] if row else 0
+
+
+# ---- likes / favourites ---------------------------------------------------
+
+async def toggle_like(session_id: str, item_type: str, item_id: str) -> bool:
+    """Insert if not liked, delete if already liked. Returns new liked state."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cur = await conn.execute(
+            "SELECT id FROM likes WHERE session_id = ? AND item_type = ? AND item_id = ?",
+            (session_id, item_type, item_id),
+        )
+        row = await cur.fetchone()
+        if row:
+            await conn.execute("DELETE FROM likes WHERE id = ?", (row[0],))
+            await conn.commit()
+            return False
+        else:
+            await conn.execute(
+                "INSERT INTO likes (id, session_id, item_type, item_id, created_at) VALUES (?,?,?,?,?)",
+                (uuid.uuid4().hex, session_id, item_type, item_id, time.time()),
+            )
+            await conn.commit()
+            return True
+
+
+async def list_likes(session_id: str, item_type: str) -> list[str]:
+    """Return all liked item_ids for the given session and type."""
+    async with aiosqlite.connect(DB_PATH) as conn:
+        cur = await conn.execute(
+            "SELECT item_id FROM likes WHERE session_id = ? AND item_type = ? ORDER BY created_at DESC",
+            (session_id, item_type),
+        )
+        rows = await cur.fetchall()
+    return [r[0] for r in rows]

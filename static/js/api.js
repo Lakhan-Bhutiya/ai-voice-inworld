@@ -60,12 +60,16 @@ export function enhance({ text }) {
   return request("/api/enhance", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, sessionId: getSessionId() }),
   });
 }
 
 export function getHistory() {
   return request(`/api/history?sessionId=${encodeURIComponent(getSessionId())}`);
+}
+
+export function deleteHistoryEntry(renderId) {
+  return request(`/api/history/${encodeURIComponent(renderId)}`, { method: "DELETE" });
 }
 
 // Clone a voice from an audio File/Blob. Returns the new custom voice object.
@@ -77,4 +81,24 @@ export function cloneVoice({ file, displayName, languageCode = "en-US", transcri
   form.append("transcription", transcription);
   form.append("sessionId", getSessionId());
   return request("/api/voices/clone", { method: "POST", body: form });
+}
+
+// ---- Likes / favourites ----------------------------------------------------
+
+export function toggleLike({ itemType, itemId }) {
+  return request("/api/likes/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ itemType, itemId, sessionId: getSessionId() }),
+  });
+}
+
+export function getLikes(itemType) {
+  return request(`/api/likes?sessionId=${encodeURIComponent(getSessionId())}&itemType=${encodeURIComponent(itemType)}`);
+}
+
+// Deletes the voice at Inworld for real (not just from local tracking) —
+// irreversible, since the sample audio was never kept.
+export function deleteCustomVoice(voiceId) {
+  return request(`/api/voices/custom/${encodeURIComponent(voiceId)}`, { method: "DELETE" });
 }
