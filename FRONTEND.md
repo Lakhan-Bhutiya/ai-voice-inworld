@@ -7,9 +7,11 @@ the frontend — just call the HTTP API.
 - **CORS:** same-origin by default. To call from another host (e.g. React on
   `localhost:3000`), set `ALLOWED_ORIGINS=http://localhost:3000` in `.env` and
   send requests with `credentials: "include"`.
-- **Auth:** if `APP_USERNAME`/`APP_PASSWORD` are set in `.env`, every endpoint
-  except `/api/health` and `/api/login` needs the session cookie from
+- **Auth:** if any account is configured in `.env`, every endpoint except
+  `/api/health` and `/api/login` needs the session cookie from
   `POST /api/login` — otherwise you get `401 {"detail": "Not signed in."}`.
+- **Roles:** `admin` sees cost figures; `user` gets the same responses with
+  every `costUsd` field omitted. Call `GET /api/me` for the current role.
 - **Interactive docs:** `http://localhost:8000/docs`
 
 Audio returns as **base64** + a ready **`dataUrl`** (default MP3). Set it as an
@@ -29,9 +31,14 @@ Audio returns as **base64** + a ready **`dataUrl`** (default MP3). Set it as an
 // request
 { "username": "admin", "password": "…" }
 // response — also sets the HttpOnly `av_session` cookie
-{ "ok": true, "username": "admin" }
+{ "ok": true, "username": "admin", "role": "admin" }
 ```
 Wrong credentials → `401 { "detail": "Wrong username or password." }`.
+
+### `GET /api/me`
+```json
+{ "username": "admin", "role": "admin", "isAdmin": true }
+```
 
 ### `GET /api/voices`
 Proxies Inworld's catalog. Shape (fields may vary):
@@ -82,8 +89,10 @@ Response:
 - `GET /api/voices/preview?voiceId=…&modelId=…` → a short, Inworld-picked sample line for any voice (built-in or cloned). Returns raw `audio/mpeg` (not JSON), cached for a day — **not metered or billed**, safe to call on every hover/click while browsing.
 
 ### `GET /api/usage?sessionId=…`
-Persisted spend — every TTS render and enhance call is priced and stored, so
-these totals survive reloads and restarts.
+Persisted usage — every TTS render and enhance call is counted and priced when
+it happens, so these totals survive reloads, restarts, and deleting a render
+from history. **`costUsd` appears only for an admin session**; a `user` gets the
+same payload without it.
 ```json
 {
   "session": { "generations": 12, "chars": 8420, "costUsd": 0.0842, "enhances": 3 },

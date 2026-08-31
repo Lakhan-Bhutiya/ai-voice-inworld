@@ -88,14 +88,35 @@ def _tts_cost(model_id: str | None, chars: int | None) -> float:
     return (chars or 0) / 1_000_000 * rate
 
 
+def _visible_totals(totals: dict, request: Request) -> dict:
+    """Usage totals as this session may see them.
+
+    Everyone gets the volume numbers (generations, characters, enhance calls);
+    only an admin gets the money. The cost keys are dropped server-side rather
+    than merely hidden in the UI, so a regular user can't read spend off the
+    API either.
+    """
+    if auth.is_admin(request.cookies.get(auth.COOKIE_NAME)):
+        return totals
+    return {
+        "session": {k: v for k, v in totals["session"].items() if k != "costUsd"},
+        "allTime": {k: v for k, v in totals["allTime"].items() if k != "costUsd"},
+        "byModel": [
+            {k: v for k, v in row.items() if k != "costUsd"} for row in totals["byModel"]
+        ],
+    }
+
+
 @app.on_event("startup")
 async def _startup():
     await db.init()
     await auth.init()
-    if not auth.enabled():
+    if auth.enabled():
+        print(f"Login enabled for roles: {', '.join(sorted(auth.ACCOUNTS))}")
+    else:
         print(
-            "WARNING: APP_USERNAME/APP_PASSWORD are not set in .env — "
-            "the UI is open to anyone who can reach it."
+            "WARNING: no ADMIN_USERNAME/ADMIN_PASSWORD (or USER_*) in .env — "
+            "the UI is open to anyone who can reach it, as an admin."
         )
 
 
@@ -145,16 +166,29 @@ async def login(req: LoginRequest, response: Response):
             status_code=500,
             detail="Login is not configured. Add APP_USERNAME and APP_PASSWORD to .env",
         )
-    if not auth.check_credentials(req.username, req.password):
+    role = auth.authenticate(req.username, req.password)
+    if not role:
         raise HTTPException(status_code=401, detail="Wrong username or password.")
     response.set_cookie(
         auth.COOKIE_NAME,
-        auth.make_token(req.username),
+        auth.make_token(req.username, role),
         max_age=auth.SESSION_TTL,
         httponly=True,
         samesite="lax",
     )
-    return {"ok": True, "username": req.username}
+    return {"ok": True, "username": req.username, "role": role}
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    """Who's signed in and what they may see. Drives the UI's money gating."""
+    session = auth.read_token(request.cookies.get(auth.COOKIE_NAME))
+    role = auth.role_for(request.cookies.get(auth.COOKIE_NAME))
+    return {
+        "username": session[0] if session else None,
+        "role": role,
+        "isAdmin": role == auth.ADMIN,
+    }
 
 
 @app.post("/api/logout")
@@ -289,7 +323,7 @@ async def voice_preview(voiceId: str, modelId: str = "inworld-tts-1.5-max"):
 
 
 @app.post("/api/synthesize")
-async def synthesize(req: SynthesizeRequest):
+async def synthesize(req: SynthesizeRequest, request: Request):
     """Call Inworld TTS and return base64 audio plus a data URL for the player."""
     text = req.text
     if req.description:
@@ -376,13 +410,15 @@ async def synthesize(req: SynthesizeRequest):
         cost_usd=_tts_cost(req.modelId, chars_billed),
         render_id=render_id,
     )
-    result["usageTotals"] = await db.usage_summary(req.sessionId)
+    result["usageTotals"] = _visible_totals(
+        await db.usage_summary(req.sessionId), request
+    )
 
     return result
 
 
 @app.post("/api/enhance")
-async def enhance(req: EnhanceRequest):
+async def enhance(req: EnhanceRequest, request: Request):
     """Use OpenAI gpt-4o-mini to insert emotion/non-verbal tags into the text."""
     if not OPENAI_API_KEY:
         raise HTTPException(
@@ -419,7 +455,7 @@ async def enhance(req: EnhanceRequest):
     )
     return {
         "enhanced": enhanced,
-        "usageTotals": await db.usage_summary(req.sessionId),
+        "usageTotals": _visible_totals(await db.usage_summary(req.sessionId), request),
     }
 
 
@@ -442,9 +478,12 @@ async def get_history(sessionId: str, limit: int = 50):
 
 
 @app.get("/api/usage")
-async def get_usage(sessionId: str | None = None):
-    """Persisted spend: this session's totals, all-time totals, and per-model."""
-    return await db.usage_summary(sessionId)
+async def get_usage(request: Request, sessionId: str | None = None):
+    """Persisted usage: this session's totals, all-time totals, and per-model.
+
+    Cost figures are included only for admins — see _visible_totals.
+    """
+    return _visible_totals(await db.usage_summary(sessionId), request)
 
 
 @app.get("/api/audio/{render_id}")

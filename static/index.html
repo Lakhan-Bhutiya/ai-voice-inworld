@@ -51,6 +51,7 @@
               <span class="status-dot" id="statusDot"></span>
               <span id="statusText">Checking…</span>
             </div>
+            <span class="micro mono" id="whoami" hidden></span>
             <button type="button" class="btn-outline" id="logoutBtn" hidden>
               <i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i> Sign out
             </button>
@@ -203,7 +204,7 @@
                 <div class="dock-meta">
                   <span class="dock-meta-label" id="dockMetaLabel">Ready to generate</span>
                   <span class="dock-meta-usage" id="dockMetaUsage" hidden></span>
-                  <span class="dock-meta-estimate" id="dockMetaEstimate"></span>
+                  <span class="dock-meta-estimate" id="dockMetaEstimate" data-admin-only></span>
                 </div>
                 <canvas class="dock-wave" id="dockWave"></canvas>
                 <div class="dock-time">
@@ -263,13 +264,17 @@
         <section class="view" data-view="costs">
           <div class="hero">
             <div>
-              <div class="hero-eyebrow"><span class="micro">03 · Costs</span></div>
-              <h1 class="hero-line">What this<br><span class="accent-mark">actually costs.</span></h1>
+              <div class="hero-eyebrow"><span class="micro" id="costsEyebrow">03 · Costs</span></div>
+              <h1 class="hero-line" data-admin-only>What this<br><span class="accent-mark">actually costs.</span></h1>
+              <h1 class="hero-line" data-user-only hidden>What you've<br><span class="accent-mark">generated.</span></h1>
             </div>
             <div>
-              <p class="hero-sub">Real published rates, and a running total for what you've generated.
+              <p class="hero-sub" data-admin-only>Real published rates, and a running total for what you've generated.
                 Every call is priced and stored server-side, so these totals survive a reload,
                 a new tab, or a restart nothing here is estimated after the fact.</p>
+              <p class="hero-sub" data-user-only hidden>Everything you've put through the studio, counted
+                server-side so the totals survive a reload, a new tab, or a restart. Billing figures
+                are visible to admins only.</p>
             </div>
           </div>
 
@@ -282,7 +287,7 @@
               <span class="micro">This session · characters billed</span>
               <div class="stat-tile-value mono" id="statChars">0</div>
             </div>
-            <div class="stat-tile">
+            <div class="stat-tile" data-admin-only>
               <span class="micro">This session · est. cost</span>
               <div class="stat-tile-value mono" id="statCost">$0.00</div>
             </div>
@@ -301,7 +306,7 @@
               <span class="micro">All time · characters billed</span>
               <div class="stat-tile-value mono" id="statAllChars">0</div>
             </div>
-            <div class="stat-tile">
+            <div class="stat-tile" data-admin-only>
               <span class="micro">All time · est. cost</span>
               <div class="stat-tile-value mono" id="statAllCost">$0.00</div>
             </div>
@@ -311,7 +316,7 @@
             </div>
           </div>
 
-          <div class="panel mb-3">
+          <div class="panel mb-3" data-admin-only>
             <div class="panel-head">
               <h2 class="section-title">Inworld TTS per character</h2>
             </div>
@@ -337,7 +342,7 @@
             </div>
           </div>
 
-          <div class="panel">
+          <div class="panel" data-admin-only>
             <div class="panel-head">
               <h2 class="section-title">Quick calculator</h2>
             </div>

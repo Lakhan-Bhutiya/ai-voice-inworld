@@ -127,10 +127,12 @@ const history = createHistory({
   },
 });
 
-// ---- Costs / session stats -----------------------------------------------------
-// Derived live from the server's render + enhance-call records, not an
-// in-memory counter — so the Costs view stays correct across reloads and
-// after cloning a voice (which no longer force-reloads the page at all).
+// ---- Usage / costs --------------------------------------------------------------
+// Read from the server's usage ledger, not an in-memory counter — so the view
+// stays correct across reloads and after cloning a voice (which no longer
+// force-reloads the page at all). Money is admin-only: the backend omits the
+// cost fields for a regular user, and applyRole below strips the UI that would
+// show them.
 
 const stats = { generations: 0, chars: 0, costUsd: 0, enhances: 0 };
 const allTime = { generations: 0, chars: 0, costUsd: 0, enhances: 0 };
@@ -149,11 +151,11 @@ const statEls = {
 function renderStats() {
   if (statEls.generations) statEls.generations.textContent = String(stats.generations);
   if (statEls.chars) statEls.chars.textContent = stats.chars.toLocaleString();
-  if (statEls.cost) statEls.cost.textContent = `$${stats.costUsd.toFixed(4)}`;
+  if (statEls.cost) statEls.cost.textContent = `$${(stats.costUsd || 0).toFixed(4)}`;
   if (statEls.enhances) statEls.enhances.textContent = String(stats.enhances);
   if (statEls.allGenerations) statEls.allGenerations.textContent = String(allTime.generations);
   if (statEls.allChars) statEls.allChars.textContent = allTime.chars.toLocaleString();
-  if (statEls.allCost) statEls.allCost.textContent = `$${allTime.costUsd.toFixed(4)}`;
+  if (statEls.allCost) statEls.allCost.textContent = `$${(allTime.costUsd || 0).toFixed(4)}`;
   if (statEls.allEnhances) statEls.allEnhances.textContent = String(allTime.enhances);
 }
 renderStats();
@@ -181,6 +183,46 @@ async function refreshStats(totals) {
 }
 
 refreshStats();
+
+// ---- Role gating ----------------------------------------------------------------
+// Only an admin sees money. Everyone sees what they've used: generations,
+// characters billed, and enhance calls. The backend enforces this on the data;
+// this just takes the corresponding UI out of the page.
+
+let isAdmin = true;
+
+function applyRole(me) {
+  isAdmin = !!me.isAdmin;
+  for (const el of document.querySelectorAll("[data-admin-only]")) {
+    if (!isAdmin) el.remove();
+  }
+  for (const el of document.querySelectorAll("[data-user-only]")) {
+    el.hidden = isAdmin;
+    if (isAdmin) el.remove();
+  }
+  const whoami = document.getElementById("whoami");
+  if (whoami && me.username) {
+    whoami.textContent = `${me.username} · ${me.role}`;
+    whoami.hidden = false;
+  }
+  if (!isAdmin) {
+    // A "Costs" page with no costs on it is just usage.
+    const eyebrow = document.getElementById("costsEyebrow");
+    if (eyebrow) eyebrow.textContent = "03 · Usage";
+    for (const btn of document.querySelectorAll('[data-view="costs"]')) {
+      btn.setAttribute("aria-label", "Usage");
+      if (btn.title) btn.title = "Usage (3)";
+    }
+  }
+}
+
+api
+  .getMe()
+  .then(applyRole)
+  .catch(() => {
+    // Can't tell who this is — assume the stricter of the two and hide money.
+    applyRole({ isAdmin: false });
+  });
 
 // Restore this session's persisted renders (survive reloads and restarts).
 api
