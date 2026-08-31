@@ -32,6 +32,10 @@
         <button type="button" class="rail-link" data-view="costs" aria-label="Costs" title="Costs (3)">
           <i class="fa-solid fa-coins"></i>
         </button>
+        <button type="button" class="rail-link" data-view="people" aria-label="Users" title="Users (4)"
+          data-admin-only>
+          <i class="fa-solid fa-user-gear"></i>
+        </button>
       </div>
       <div class="rail-foot">
         <button type="button" class="rail-theme-toggle theme-toggle-btn" id="themeToggle"
@@ -280,38 +284,38 @@
 
           <div class="stat-row">
             <div class="stat-tile">
-              <span class="micro">This session · generations</span>
+              <span class="micro">You · generations</span>
               <div class="stat-tile-value mono" id="statGenerations">0</div>
             </div>
             <div class="stat-tile">
-              <span class="micro">This session · characters billed</span>
+              <span class="micro">You · characters billed</span>
               <div class="stat-tile-value mono" id="statChars">0</div>
             </div>
             <div class="stat-tile" data-admin-only>
-              <span class="micro">This session · est. cost</span>
+              <span class="micro">You · est. cost</span>
               <div class="stat-tile-value mono" id="statCost">$0.00</div>
             </div>
             <div class="stat-tile">
-              <span class="micro">This session · enhance calls</span>
+              <span class="micro">You · enhance calls</span>
               <div class="stat-tile-value mono" id="statEnhances">0</div>
             </div>
           </div>
 
-          <div class="stat-row">
+          <div class="stat-row" data-admin-only>
             <div class="stat-tile">
-              <span class="micro">All time · generations</span>
+              <span class="micro">All users · generations</span>
               <div class="stat-tile-value mono" id="statAllGenerations">0</div>
             </div>
             <div class="stat-tile">
-              <span class="micro">All time · characters billed</span>
+              <span class="micro">All users · characters billed</span>
               <div class="stat-tile-value mono" id="statAllChars">0</div>
             </div>
-            <div class="stat-tile" data-admin-only>
-              <span class="micro">All time · est. cost</span>
+            <div class="stat-tile">
+              <span class="micro">All users · est. cost</span>
               <div class="stat-tile-value mono" id="statAllCost">$0.00</div>
             </div>
             <div class="stat-tile">
-              <span class="micro">All time · enhance calls</span>
+              <span class="micro">All users · enhance calls</span>
               <div class="stat-tile-value mono" id="statAllEnhances">0</div>
             </div>
           </div>
@@ -357,6 +361,84 @@
           </div>
         </section>
 
+
+        <!-- ============================ USERS (admin) ============================ -->
+        <section class="view" data-view="people" data-admin-only>
+          <div class="hero">
+            <div>
+              <div class="hero-eyebrow"><span class="micro">04 · Users</span></div>
+              <h1 class="hero-line">Who's on<br><span class="accent-mark">the studio.</span></h1>
+            </div>
+            <div>
+              <p class="hero-sub">Create an account, hand over the password, and see exactly what each
+                person has generated and what it cost. Everyone's history, cloned voices and likes are
+                their own nobody sees anyone else's work.</p>
+            </div>
+          </div>
+
+          <div class="panel mb-3">
+            <div class="panel-head">
+              <h2 class="section-title">Add an account</h2>
+              <span class="micro">The password shows once, right after you create it</span>
+            </div>
+            <form class="user-form" id="createUserForm">
+              <div>
+                <label class="micro d-block mb-1" for="newUsername">Username</label>
+                <input class="direction-input" id="newUsername" placeholder="e.g. riya"
+                  autocapitalize="none" spellcheck="false" required />
+              </div>
+              <div>
+                <label class="micro d-block mb-1" for="newDisplayName">Display name <span class="text-fade">optional</span></label>
+                <input class="direction-input" id="newDisplayName" placeholder="e.g. Riya S" />
+              </div>
+              <div>
+                <label class="micro d-block mb-1" for="newPassword">Password <span class="text-fade">blank = generate</span></label>
+                <input class="direction-input" id="newPassword" placeholder="leave blank for a strong one"
+                  autocomplete="off" />
+              </div>
+              <button class="btn-lime" type="submit" id="createUserBtn">
+                <i class="fa-solid fa-user-plus" aria-hidden="true"></i> Create
+              </button>
+            </form>
+            <div class="credential-slip" id="credentialSlip" hidden>
+              <div>
+                <span class="micro">Hand these to the person now this is the only time the password is shown.</span>
+                <p class="credential-line mono" id="credentialLine"></p>
+              </div>
+              <button type="button" class="btn-outline" id="copyCredentials">
+                <i class="fa-regular fa-copy" aria-hidden="true"></i> Copy
+              </button>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h2 class="section-title">Accounts</h2>
+              <span class="micro mono" id="userCount"></span>
+            </div>
+            <div class="table-scroll">
+              <table class="user-table">
+                <thead>
+                  <tr>
+                    <th>Account</th>
+                    <th class="num">Generations</th>
+                    <th class="num">Characters</th>
+                    <th class="num">Est. cost</th>
+                    <th class="num">Enhance</th>
+                    <th>Last used</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody id="userTableBody"></tbody>
+              </table>
+            </div>
+            <p class="text-muted-3" style="font-size:var(--fs-small); margin:14px 0 0;">
+              Deleting an account also deletes its renders, stored audio, cloned voices and usage
+              history that can't be undone. Suspending is reversible and cuts access immediately.
+            </p>
+          </div>
+        </section>
+
       </div>
     </main>
 
@@ -370,6 +452,8 @@
         class="fa-solid fa-users"></i></button>
     <button type="button" class="mnav-link" data-view="costs" aria-label="Costs"><i
         class="fa-solid fa-coins"></i></button>
+    <button type="button" class="mnav-link" data-view="people" aria-label="Users" data-admin-only><i
+        class="fa-solid fa-user-gear"></i></button>
     <button type="button" class="mnav-link theme-toggle-btn" id="mobileThemeToggle" aria-label="Toggle theme"><i
         class="fa-solid fa-moon"></i></button>
   </nav>

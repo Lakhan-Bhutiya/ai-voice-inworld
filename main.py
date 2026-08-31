@@ -8,11 +8,14 @@ gpt-4o-mini optionally inserts emotion/non-verbal tags into the text.
 
 import base64
 import os
+import secrets
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import (
+    Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -88,19 +91,19 @@ def _tts_cost(model_id: str | None, chars: int | None) -> float:
     return (chars or 0) / 1_000_000 * rate
 
 
-def _visible_totals(totals: dict, request: Request) -> dict:
+def _visible_totals(totals: dict, session: dict) -> dict:
     """Usage totals as this session may see them.
 
-    Everyone gets the volume numbers (generations, characters, enhance calls);
-    only an admin gets the money. The cost keys are dropped server-side rather
-    than merely hidden in the UI, so a regular user can't read spend off the
-    API either.
+    Everyone gets their own volume numbers (generations, characters, enhance
+    calls); only an admin gets the money, and the all-users total. The keys are
+    dropped server-side rather than merely hidden in the UI, so a regular user
+    can't read spend off the API either.
     """
-    if auth.is_admin(request.cookies.get(auth.COOKIE_NAME)):
+    if auth.is_admin(session):
         return totals
+    # A user sees their own volume only: no money, and no window onto anyone else.
     return {
-        "session": {k: v for k, v in totals["session"].items() if k != "costUsd"},
-        "allTime": {k: v for k, v in totals["allTime"].items() if k != "costUsd"},
+        "you": {k: v for k, v in totals["you"].items() if k != "costUsd"},
         "byModel": [
             {k: v for k, v in row.items() if k != "costUsd"} for row in totals["byModel"]
         ],
@@ -112,11 +115,19 @@ async def _startup():
     await db.init()
     await auth.init()
     if auth.enabled():
-        print(f"Login enabled for roles: {', '.join(sorted(auth.ACCOUNTS))}")
+        accounts = await db.list_users()
+        print(
+            f"Login enabled. Admin: {auth.ADMIN_USERNAME}. "
+            f"User accounts: {len(accounts)} (the admin creates these in the app).",
+            # Unbuffered: piped to a log file this line would otherwise sit in
+            # the buffer until shutdown, which is exactly when nobody reads it.
+            flush=True,
+        )
     else:
         print(
-            "WARNING: no ADMIN_USERNAME/ADMIN_PASSWORD (or USER_*) in .env — "
-            "the UI is open to anyone who can reach it, as an admin."
+            "WARNING: no ADMIN_USERNAME/ADMIN_PASSWORD in .env — "
+            "the UI is open to anyone who can reach it, as an admin.",
+            flush=True,
         )
 
 
@@ -131,19 +142,32 @@ PUBLIC_PATHS = {"/login", "/api/login", "/api/health", "/favicon.ico"}
 async def require_login(request: Request, call_next):
     path = request.url.path
     if (
-        not auth.enabled()
-        or path in PUBLIC_PATHS
+        path in PUBLIC_PATHS
         or path.startswith("/static/")
         or request.method == "OPTIONS"
     ):
         return await call_next(request)
 
-    if auth.valid_token(request.cookies.get(auth.COOKIE_NAME)):
+    if await auth.session_for(request.cookies.get(auth.COOKIE_NAME)):
         return await call_next(request)
 
     if path.startswith("/api/"):
         return JSONResponse({"detail": "Not signed in."}, status_code=401)
     return RedirectResponse("/login", status_code=303)
+
+
+async def current_session(request: Request) -> dict:
+    """The signed-in account. Past the middleware this is always present."""
+    session = await auth.session_for(request.cookies.get(auth.COOKIE_NAME))
+    if not session:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    return session
+
+
+async def require_admin(session: dict = Depends(current_session)) -> dict:
+    if not auth.is_admin(session):
+        raise HTTPException(status_code=403, detail="Admins only.")
+    return session
 
 
 class LoginRequest(BaseModel):
@@ -154,7 +178,7 @@ class LoginRequest(BaseModel):
 @app.get("/login")
 async def login_page(request: Request):
     """The sign-in screen — skipped entirely if you already have a session."""
-    if not auth.enabled() or auth.valid_token(request.cookies.get(auth.COOKIE_NAME)):
+    if await auth.session_for(request.cookies.get(auth.COOKIE_NAME)):
         return RedirectResponse("/", status_code=303)
     return FileResponse(BASE_DIR / "static" / "login.html")
 
@@ -164,30 +188,28 @@ async def login(req: LoginRequest, response: Response):
     if not auth.enabled():
         raise HTTPException(
             status_code=500,
-            detail="Login is not configured. Add APP_USERNAME and APP_PASSWORD to .env",
+            detail="Login is not configured. Add ADMIN_USERNAME and ADMIN_PASSWORD to .env",
         )
-    role = auth.authenticate(req.username, req.password)
-    if not role:
+    session = await auth.authenticate(req.username, req.password)
+    if not session:
         raise HTTPException(status_code=401, detail="Wrong username or password.")
     response.set_cookie(
         auth.COOKIE_NAME,
-        auth.make_token(req.username, role),
+        auth.make_token(session),
         max_age=auth.SESSION_TTL,
         httponly=True,
         samesite="lax",
     )
-    return {"ok": True, "username": req.username, "role": role}
+    return {"ok": True, "username": session["username"], "role": session["role"]}
 
 
 @app.get("/api/me")
-async def me(request: Request):
+async def me(session: dict = Depends(current_session)):
     """Who's signed in and what they may see. Drives the UI's money gating."""
-    session = auth.read_token(request.cookies.get(auth.COOKIE_NAME))
-    role = auth.role_for(request.cookies.get(auth.COOKIE_NAME))
     return {
-        "username": session[0] if session else None,
-        "role": role,
-        "isAdmin": role == auth.ADMIN,
+        "username": session["username"],
+        "role": session["role"],
+        "isAdmin": auth.is_admin(session),
     }
 
 
@@ -210,20 +232,15 @@ class SynthesizeRequest(BaseModel):
     speakingRate: float = Field(1.0, ge=0.5, le=1.5)   # 1.0 = normal speed
     temperature: float | None = Field(None, ge=0.0, le=2.0)  # variation; ignored on tts-2
     deliveryMode: str | None = None  # STABLE | BALANCED | CREATIVE (tts-2 only)
-    # If provided, the render is persisted to this browser session's history.
-    sessionId: str | None = None
 
 
 class EnhanceRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
-    # If provided, the enhance call is counted against this session's usage.
-    sessionId: str | None = None
 
 
 class LikeRequest(BaseModel):
     itemType: str = Field(..., pattern="^(voice|render)$")
     itemId: str = Field(..., min_length=1)
-    sessionId: str | None = None
 
 
 def _auth_headers() -> dict:
@@ -281,7 +298,7 @@ def _invalidate_catalog_cache() -> None:
 
 
 @app.get("/api/voices")
-async def list_voices():
+async def list_voices(session: dict = Depends(current_session)):
     """Custom (cloned) voices first, then Inworld's built-in catalog.
 
     Inworld's own catalog can already contain voices cloned earlier (it's
@@ -292,7 +309,7 @@ async def list_voices():
     the catalog) isn't listed twice.
     """
     catalog = await _fetch_catalog()
-    custom = await db.list_custom_voices()
+    custom = await db.list_custom_voices(session["ownerId"])
     custom_ids = {v["voiceId"] for v in custom}
     return {"voices": custom + [v for v in catalog if v.get("voiceId") not in custom_ids]}
 
@@ -323,7 +340,7 @@ async def voice_preview(voiceId: str, modelId: str = "inworld-tts-1.5-max"):
 
 
 @app.post("/api/synthesize")
-async def synthesize(req: SynthesizeRequest, request: Request):
+async def synthesize(req: SynthesizeRequest, session: dict = Depends(current_session)):
     """Call Inworld TTS and return base64 audio plus a data URL for the player."""
     text = req.text
     if req.description:
@@ -379,46 +396,40 @@ async def synthesize(req: SynthesizeRequest, request: Request):
 
     usage = data.get("usage") or {}
     chars_billed = usage.get("processedCharactersCount")
-    render_id = None
+    owner = session["ownerId"]
 
-    # Persist to this session's history so it survives reloads/restarts.
-    if req.sessionId:
-        ext = {"MP3": "mp3", "OGG_OPUS": "ogg", "FLAC": "flac"}.get(
-            req.audioEncoding, "wav"
-        )
-        record = await db.add_render(
-            session_id=req.sessionId,
-            text=req.text,
-            audio_bytes=base64.b64decode(audio_b64),
-            voice_id=req.voiceId,
-            voice_name=req.voiceName,
-            model_id=req.modelId,
-            description=req.description,
-            chars_billed=chars_billed,
-            ext=ext,
-        )
-        render_id = record["renderId"]
-        result["renderId"] = render_id
-        result["audioUrl"] = record["audioUrl"]
+    # Persist to this account's history so it survives reloads and restarts.
+    ext = {"MP3": "mp3", "OGG_OPUS": "ogg", "FLAC": "flac"}.get(req.audioEncoding, "wav")
+    record = await db.add_render(
+        user_id=owner,
+        text=req.text,
+        audio_bytes=base64.b64decode(audio_b64),
+        voice_id=req.voiceId,
+        voice_name=req.voiceName,
+        model_id=req.modelId,
+        description=req.description,
+        chars_billed=chars_billed,
+        ext=ext,
+    )
+    result["renderId"] = record["renderId"]
+    result["audioUrl"] = record["audioUrl"]
 
-    # Bill it. Logged for every render, session or not, so all-time totals are real.
+    # Bill it against whoever asked for it.
     await db.log_usage(
-        session_id=req.sessionId,
+        user_id=owner,
         kind="tts",
         model_id=req.modelId,
         chars=chars_billed or 0,
         cost_usd=_tts_cost(req.modelId, chars_billed),
-        render_id=render_id,
+        render_id=record["renderId"],
     )
-    result["usageTotals"] = _visible_totals(
-        await db.usage_summary(req.sessionId), request
-    )
+    result["usageTotals"] = _visible_totals(await db.usage_summary(owner), session)
 
     return result
 
 
 @app.post("/api/enhance")
-async def enhance(req: EnhanceRequest, request: Request):
+async def enhance(req: EnhanceRequest, session: dict = Depends(current_session)):
     """Use OpenAI gpt-4o-mini to insert emotion/non-verbal tags into the text."""
     if not OPENAI_API_KEY:
         raise HTTPException(
@@ -447,7 +458,7 @@ async def enhance(req: EnhanceRequest, request: Request):
     enhanced = resp.json()["choices"][0]["message"]["content"].strip()
 
     await db.log_usage(
-        session_id=req.sessionId,
+        user_id=session["ownerId"],
         kind="enhance",
         model_id="gpt-4o-mini",
         chars=len(req.text) + len(enhanced),
@@ -455,7 +466,9 @@ async def enhance(req: EnhanceRequest, request: Request):
     )
     return {
         "enhanced": enhanced,
-        "usageTotals": _visible_totals(await db.usage_summary(req.sessionId), request),
+        "usageTotals": _visible_totals(
+            await db.usage_summary(session["ownerId"]), session
+        ),
     }
 
 
@@ -463,41 +476,45 @@ async def enhance(req: EnhanceRequest, request: Request):
 
 
 @app.get("/api/history")
-async def get_history(sessionId: str, limit: int = 50):
-    """Past renders for a browser session (newest first), for restore on reload.
+async def get_history(limit: int = 50, session: dict = Depends(current_session)):
+    """Your past renders (newest first), for restore on reload.
 
-    Also returns enhanceCount so the Costs view's stats can be rebuilt from
-    what was actually billed instead of an in-memory counter that resets on
-    every page load.
+    Also returns enhanceCount so the Usage view's stats can be rebuilt from what
+    was actually billed instead of an in-memory counter that resets on every
+    page load.
     """
+    owner = session["ownerId"]
     return {
-        "history": await db.list_renders(sessionId, limit),
-        "enhanceCount": await db.count_enhance_calls(sessionId),
-        "likedRenderIds": await db.list_likes(sessionId, "render"),
+        "history": await db.list_renders(owner, limit),
+        "enhanceCount": await db.count_enhance_calls(owner),
+        "likedRenderIds": await db.list_likes(owner, "render"),
     }
 
 
 @app.get("/api/usage")
-async def get_usage(request: Request, sessionId: str | None = None):
-    """Persisted usage: this session's totals, all-time totals, and per-model.
+async def get_usage(session: dict = Depends(current_session)):
+    """Persisted usage: your totals, per-model, and (admin only) everyone's.
 
     Cost figures are included only for admins — see _visible_totals.
     """
-    return _visible_totals(await db.usage_summary(sessionId), request)
+    return _visible_totals(await db.usage_summary(session["ownerId"]), session)
 
 
 @app.get("/api/audio/{render_id}")
-async def get_audio(render_id: str):
-    """Serve a stored render's audio so history entries can replay without re-billing."""
-    path = await db.get_audio_path(render_id)
+async def get_audio(render_id: str, session: dict = Depends(current_session)):
+    """Serve a stored render's audio so history entries replay without re-billing.
+
+    Scoped to the owner, so one account can't fetch another's audio by id.
+    """
+    path = await db.get_audio_path(render_id, session["ownerId"])
     if not path or not Path(path).exists():
         raise HTTPException(status_code=404, detail="Audio not found")
     return FileResponse(path)
 
 
 @app.delete("/api/history/{render_id}")
-async def delete_history(render_id: str):
-    if not await db.delete_render(render_id):
+async def delete_history(render_id: str, session: dict = Depends(current_session)):
+    if not await db.delete_render(render_id, session["ownerId"]):
         raise HTTPException(status_code=404, detail="Render not found")
     return {"deleted": render_id}
 
@@ -506,18 +523,16 @@ async def delete_history(render_id: str):
 
 
 @app.post("/api/likes/toggle")
-async def toggle_like(req: LikeRequest):
-    if not req.sessionId:
-        raise HTTPException(status_code=400, detail="sessionId is required")
-    liked = await db.toggle_like(req.sessionId, req.itemType, req.itemId)
+async def toggle_like(req: LikeRequest, session: dict = Depends(current_session)):
+    liked = await db.toggle_like(session["ownerId"], req.itemType, req.itemId)
     return {"liked": liked, "itemType": req.itemType, "itemId": req.itemId}
 
 
 @app.get("/api/likes")
-async def get_likes(sessionId: str, itemType: str):
+async def get_likes(itemType: str, session: dict = Depends(current_session)):
     if itemType not in ("voice", "render"):
         raise HTTPException(status_code=400, detail="itemType must be 'voice' or 'render'")
-    return {"likes": await db.list_likes(sessionId, itemType)}
+    return {"likes": await db.list_likes(session["ownerId"], itemType)}
 
 
 # ---- Custom voice cloning ----------------------------------------------------
@@ -529,7 +544,7 @@ async def clone_voice(
     displayName: str = Form(...),
     languageCode: str = Form("en-US"),
     transcription: str = Form(""),
-    sessionId: str = Form(""),
+    session: dict = Depends(current_session),
 ):
     """Clone a voice from a 5-15s audio sample (wav/mp3, <=4MB) via Inworld."""
     raw = await file.read()
@@ -565,7 +580,7 @@ async def clone_voice(
         voice_id=voice_id,
         display_name=voice.get("displayName") or displayName,
         language_code=voice.get("languageCode") or languageCode,
-        session_id=sessionId or None,
+        user_id=session["ownerId"],
     )
     return {
         "voiceId": voice_id,
@@ -622,6 +637,121 @@ async def delete_custom(voice_id: str):
     await db.delete_custom_voice(voice_id)  # best-effort; may not have a local row
     _invalidate_catalog_cache()
     return {"deleted": voice_id}
+
+
+# ---- Admin: accounts ---------------------------------------------------------
+# Only the admin (whose own credentials live in .env) can reach any of these.
+
+
+class CreateUserRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    # Blank asks the server to generate one — the admin hands it to the person.
+    password: str = Field("", max_length=200)
+    displayName: str | None = Field(None, max_length=80)
+
+
+class SetPasswordRequest(BaseModel):
+    password: str = Field("", max_length=200)
+
+
+class SetDisabledRequest(BaseModel):
+    disabled: bool
+
+
+def _generated_password() -> str:
+    """Readable but unguessable — the admin has to be able to type it out once."""
+    alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(14))
+
+
+def _check_password(password: str) -> str:
+    """Use the given password, or make one. Returns what the account will get."""
+    if not password:
+        return _generated_password()
+    if len(password) < 8:
+        raise HTTPException(
+            status_code=400, detail="Password must be at least 8 characters."
+        )
+    return password
+
+
+@app.get("/api/admin/users")
+async def admin_list_users(_: dict = Depends(require_admin)):
+    """Every account with what it has used and spent."""
+    users = await db.list_users()
+    usage = {row["userId"]: row for row in await db.usage_by_user()}
+    empty = {"generations": 0, "chars": 0, "costUsd": 0.0, "enhances": 0, "lastUsedAt": None}
+    return {
+        "users": [
+            {**u, "usage": {k: v for k, v in usage.get(u["id"], empty).items()
+                            if k != "userId"}}
+            for u in users
+        ],
+        "admin": {
+            "username": auth.ADMIN_USERNAME,
+            "usage": {k: v for k, v in usage.get(auth.ADMIN_ID, empty).items()
+                      if k != "userId"},
+        },
+    }
+
+
+@app.post("/api/admin/users", status_code=201)
+async def admin_create_user(
+    req: CreateUserRequest, _: dict = Depends(require_admin)
+):
+    """Create an account. The password is returned once, and only here — it's
+    stored as a salted hash, so nobody (admin included) can read it back later.
+    """
+    username = req.username.strip()
+    if not auth.USERNAME_RE.match(username):
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be 3-32 characters: letters, digits, dot, dash "
+                   "or underscore, starting with a letter or digit.",
+        )
+    if auth.ADMIN_USERNAME and username.lower() == auth.ADMIN_USERNAME.lower():
+        raise HTTPException(
+            status_code=400, detail="That username belongs to the admin account."
+        )
+    password = _check_password(req.password)
+    try:
+        user = await db.create_user(
+            username=username, password=password, display_name=req.displayName
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {**user, "password": password}
+
+
+@app.post("/api/admin/users/{user_id}/password")
+async def admin_set_password(
+    user_id: str, req: SetPasswordRequest, _: dict = Depends(require_admin)
+):
+    """Reset a password and hand back the new one — shown once, then hashed."""
+    password = _check_password(req.password)
+    if not await db.set_password(user_id, password):
+        raise HTTPException(status_code=404, detail="No such user.")
+    return {"userId": user_id, "password": password}
+
+
+@app.post("/api/admin/users/{user_id}/disabled")
+async def admin_set_disabled(
+    user_id: str, req: SetDisabledRequest, _: dict = Depends(require_admin)
+):
+    """Suspend or restore an account. A disabled account's cookie stops working
+    on its next request, so access ends immediately rather than at expiry."""
+    if not await db.set_disabled(user_id, req.disabled):
+        raise HTTPException(status_code=404, detail="No such user.")
+    return {"userId": user_id, "disabled": req.disabled}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, _: dict = Depends(require_admin)):
+    """Delete an account and everything it owns — renders, audio files, cloned
+    voices, likes, and its usage rows. The spend history goes with it."""
+    if not await db.delete_user(user_id):
+        raise HTTPException(status_code=404, detail="No such user.")
+    return {"deleted": user_id}
 
 
 @app.get("/")

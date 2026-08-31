@@ -2,16 +2,9 @@
 // Every function throws a plain Error whose .message is the backend's
 // `detail` string when present, so callers never touch response shape.
 
-// Stable per-browser session id, so history persists across reloads.
-const SESSION_KEY = "aivoice.sessionId";
-export function getSessionId() {
-  let id = localStorage.getItem(SESSION_KEY);
-  if (!id) {
-    id = (crypto.randomUUID?.() || String(Date.now() + Math.random())).replace(/-/g, "");
-    localStorage.setItem(SESSION_KEY, id);
-  }
-  return id;
-}
+// Nothing here identifies the caller: the backend owns everything by the
+// signed-in account, read from the session cookie. History, cloned voices,
+// likes and usage all follow the login, not the browser.
 
 async function request(path, options) {
   let res;
@@ -56,7 +49,6 @@ export function synthesize({
     body: JSON.stringify({
       text, voiceId, voiceName, modelId, description, audioEncoding,
       speakingRate, temperature, deliveryMode,
-      sessionId: getSessionId(),
     }),
   });
 }
@@ -65,22 +57,22 @@ export function enhance({ text }) {
   return request("/api/enhance", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, sessionId: getSessionId() }),
+    body: JSON.stringify({ text }),
   });
 }
 
 export function getHistory() {
-  return request(`/api/history?sessionId=${encodeURIComponent(getSessionId())}`);
+  return request("/api/history");
 }
 
 export function deleteHistoryEntry(renderId) {
   return request(`/api/history/${encodeURIComponent(renderId)}`, { method: "DELETE" });
 }
 
-// Persisted usage totals: this session, all time, and per model. Money figures
-// are omitted by the backend unless you're signed in as an admin.
+// Your persisted usage totals, per model, plus everyone's for an admin. Money
+// figures are omitted by the backend unless you're signed in as an admin.
 export function getUsage() {
-  return request(`/api/usage?sessionId=${encodeURIComponent(getSessionId())}`);
+  return request("/api/usage");
 }
 
 // Who's signed in, and whether they may see costs.
@@ -99,7 +91,6 @@ export function cloneVoice({ file, displayName, languageCode = "en-US", transcri
   form.append("displayName", displayName);
   form.append("languageCode", languageCode);
   form.append("transcription", transcription);
-  form.append("sessionId", getSessionId());
   return request("/api/voices/clone", { method: "POST", body: form });
 }
 
@@ -109,16 +100,53 @@ export function toggleLike({ itemType, itemId }) {
   return request("/api/likes/toggle", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ itemType, itemId, sessionId: getSessionId() }),
+    body: JSON.stringify({ itemType, itemId }),
   });
 }
 
 export function getLikes(itemType) {
-  return request(`/api/likes?sessionId=${encodeURIComponent(getSessionId())}&itemType=${encodeURIComponent(itemType)}`);
+  return request(`/api/likes?itemType=${encodeURIComponent(itemType)}`);
 }
 
 // Deletes the voice at Inworld for real (not just from local tracking) —
 // irreversible, since the sample audio was never kept.
 export function deleteCustomVoice(voiceId) {
   return request(`/api/voices/custom/${encodeURIComponent(voiceId)}`, { method: "DELETE" });
+}
+
+// ---- Admin: accounts -------------------------------------------------------
+// All admin-only; a regular user gets 403 from every one of these.
+
+export function listUsers() {
+  return request("/api/admin/users");
+}
+
+// Leave `password` empty to have the server generate one. It comes back in the
+// response — that's the only time it's ever readable.
+export function createUser({ username, password = "", displayName = null }) {
+  return request("/api/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password, displayName }),
+  });
+}
+
+export function resetUserPassword(userId, password = "") {
+  return request(`/api/admin/users/${encodeURIComponent(userId)}/password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ password }),
+  });
+}
+
+export function setUserDisabled(userId, disabled) {
+  return request(`/api/admin/users/${encodeURIComponent(userId)}/disabled`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ disabled }),
+  });
+}
+
+export function deleteUser(userId) {
+  return request(`/api/admin/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
 }

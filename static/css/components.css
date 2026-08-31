@@ -1794,3 +1794,114 @@
   padding-top: 20px;
   border-top: 1px solid var(--line);
 }
+
+/* ---- Admin: accounts ------------------------------------------------------ */
+
+.user-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  align-items: end;
+  gap: 12px;
+}
+@media (max-width: 767px) {
+  .user-form { grid-template-columns: 1fr; }
+}
+
+.credential-slip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  /* Dashed, like the read-aloud prompt: something to act on, then it's gone. */
+  border: 1px dashed var(--line-strong);
+}
+.credential-line {
+  margin: 6px 0 0;
+  font-size: var(--fs-body);
+  font-weight: 700;
+  color: var(--ink);
+  word-break: break-all;
+}
+
+/* The table can outgrow a phone; let it scroll on its own rather than the page. */
+.table-scroll {
+  overflow-x: auto;
+}
+
+.user-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs-small);
+}
+.user-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+  padding: 0 12px 10px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.user-table td {
+  padding: 12px 12px 12px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  color: var(--ink-2);
+}
+.user-table tr:last-child td { border-bottom: none; }
+.user-table .num { text-align: right; }
+.user-table tr.is-disabled td { opacity: 0.5; }
+
+.user-name {
+  display: block;
+  color: var(--ink);
+  font-weight: 600;
+}
+.user-sub,
+.user-tag {
+  display: block;
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+}
+.user-tag {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+  font-size: 11px;
+}
+
+.user-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  padding-left: 8px;
+}
+.icon-action {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.icon-action:hover {
+  color: var(--ink);
+  border-color: var(--ink-3);
+}
+.icon-action.danger {
+  color: var(--danger);
+  border-color: var(--danger);
+}

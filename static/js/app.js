@@ -166,8 +166,9 @@ renderStats();
 // omitted server-side unless you're signed in as an admin.
 function applyTotals(totals) {
   if (!totals) return;
-  Object.assign(stats, totals.session);
-  Object.assign(allTime, totals.allTime);
+  Object.assign(stats, totals.you);
+  // allUsers is admin-only, so a user's payload simply doesn't carry it.
+  if (totals.allUsers) Object.assign(allTime, totals.allUsers);
   renderStats();
 }
 
@@ -218,13 +219,199 @@ function applyRole(me) {
 
 api
   .getMe()
-  .then(applyRole)
+  .then((me) => {
+    applyRole(me);
+    if (me.isAdmin) loadUsers();
+  })
   .catch(() => {
     // Can't tell who this is — assume the stricter of the two and hide money.
     applyRole({ isAdmin: false });
   });
 
-// Restore this session's persisted renders (survive reloads and restarts).
+// ---- Admin: accounts ------------------------------------------------------------
+// The admin creates an account, hands over the password once, and watches what
+// each person generates. Every control here lives inside [data-admin-only]
+// markup, so for a user it was removed from the page before this ever runs —
+// and the endpoints answer 403 regardless.
+
+const createUserForm = document.getElementById("createUserForm");
+const userTableBody = document.getElementById("userTableBody");
+const userCount = document.getElementById("userCount");
+const credentialSlip = document.getElementById("credentialSlip");
+const credentialLine = document.getElementById("credentialLine");
+
+function formatWhen(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  const days = (Date.now() - d) / 86_400_000;
+  if (days < 1) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function showCredentials(username, password) {
+  if (!credentialSlip) return;
+  credentialLine.textContent = `${username} / ${password}`;
+  credentialSlip.hidden = false;
+}
+
+function userRow(user) {
+  const tr = document.createElement("tr");
+  if (user.disabled) tr.classList.add("is-disabled");
+
+  const who = document.createElement("td");
+  const name = document.createElement("span");
+  name.className = "user-name";
+  name.textContent = user.username;
+  who.appendChild(name);
+  if (user.displayName) {
+    const sub = document.createElement("span");
+    sub.className = "user-sub";
+    sub.textContent = user.displayName;
+    who.appendChild(sub);
+  }
+  if (user.disabled) {
+    const tag = document.createElement("span");
+    tag.className = "user-tag";
+    tag.textContent = "suspended";
+    who.appendChild(tag);
+  }
+
+  const u = user.usage;
+  const cells = [
+    u.generations.toLocaleString(),
+    u.chars.toLocaleString(),
+    `$${(u.costUsd || 0).toFixed(4)}`,
+    String(u.enhances),
+  ].map((text) => {
+    const td = document.createElement("td");
+    td.className = "num mono";
+    td.textContent = text;
+    return td;
+  });
+
+  const last = document.createElement("td");
+  last.className = "micro";
+  last.textContent = formatWhen(u.lastUsedAt);
+
+  const actions = document.createElement("td");
+  actions.className = "user-actions";
+  if (user.id) {
+    actions.append(
+      userAction("Reset password", "fa-key", async () => {
+        const { password } = await api.resetUserPassword(user.id);
+        showCredentials(user.username, password);
+        showToast(`New password for ${user.username} — shown above.`);
+      }),
+      userAction(user.disabled ? "Restore" : "Suspend",
+        user.disabled ? "fa-circle-play" : "fa-ban", async () => {
+          await api.setUserDisabled(user.id, !user.disabled);
+          showToast(`${user.username} ${user.disabled ? "restored" : "suspended"}.`);
+          await loadUsers();
+        }),
+      userAction("Delete", "fa-trash", async (btn) => {
+        // Two-step rather than a confirm() dialog, which blocks the page.
+        if (btn.dataset.armed !== "1") {
+          btn.dataset.armed = "1";
+          btn.classList.add("danger");
+          btn.title = "Deletes their renders and audio too — click again";
+          btn.querySelector("i").className = "fa-solid fa-triangle-exclamation";
+          setTimeout(() => {
+            btn.dataset.armed = "0";
+            btn.classList.remove("danger");
+            btn.title = "Delete";
+            btn.querySelector("i").className = "fa-solid fa-trash";
+          }, 4000);
+          return;
+        }
+        await api.deleteUser(user.id);
+        showToast(`Deleted ${user.username} and everything they generated.`);
+        await loadUsers();
+      }),
+    );
+  } else {
+    const note = document.createElement("span");
+    note.className = "micro";
+    note.textContent = "from .env";
+    actions.appendChild(note);
+  }
+
+  tr.append(who, ...cells, last, actions);
+  return tr;
+}
+
+function userAction(label, icon, handler) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "icon-action";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+  btn.innerHTML = `<i class="fa-solid ${icon}" aria-hidden="true"></i>`;
+  btn.addEventListener("click", async () => {
+    try {
+      await handler(btn);
+    } catch (e) {
+      showToast(e.message);
+    }
+  });
+  return btn;
+}
+
+async function loadUsers() {
+  if (!userTableBody) return;
+  try {
+    const { users, admin } = await api.listUsers();
+    userTableBody.replaceChildren(
+      // The admin sits at the top of its own table, without action buttons:
+      // its credentials live in .env, not in the database.
+      userRow({ username: admin.username, displayName: "admin · from .env", usage: admin.usage }),
+      ...users.map(userRow),
+    );
+    if (userCount) {
+      userCount.textContent = `${users.length} account${users.length === 1 ? "" : "s"}`;
+    }
+  } catch (e) {
+    showToast(`Couldn't load accounts: ${e.message}`);
+  }
+}
+
+createUserForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const username = document.getElementById("newUsername");
+  const displayName = document.getElementById("newDisplayName");
+  const password = document.getElementById("newPassword");
+  const submit = document.getElementById("createUserBtn");
+  if (!username.value.trim()) return;
+
+  submit.disabled = true;
+  try {
+    const user = await api.createUser({
+      username: username.value.trim(),
+      password: password.value,
+      displayName: displayName.value.trim() || null,
+    });
+    showCredentials(user.username, user.password);
+    username.value = "";
+    displayName.value = "";
+    password.value = "";
+    await loadUsers();
+    await refreshStats();
+  } catch (err) {
+    showToast(err.message);
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+document.getElementById("copyCredentials")?.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(credentialLine.textContent);
+    showToast("Credentials copied.");
+  } catch {
+    showToast("Couldn't copy — select the text instead.");
+  }
+});
+
+// Restore this account's persisted renders (survive reloads and restarts).
 api
   .getHistory()
   .then(({ history: rows, likedRenderIds }) => {
@@ -500,8 +687,10 @@ document.addEventListener("keydown", (e) => {
     document.getElementById("scriptText")?.focus();
     return;
   }
-  if (!typingInField && ["1", "2", "3"].includes(e.key)) {
-    const names = ["studio", "voices", "costs"];
-    showView(names[Number(e.key) - 1]);
+  if (!typingInField && ["1", "2", "3", "4"].includes(e.key)) {
+    const names = ["studio", "voices", "costs", "people"];
+    const name = names[Number(e.key) - 1];
+    // "4" is the admin's Users view; for anyone else it isn't in the page.
+    if (document.querySelector(`.view[data-view="${name}"]`)) showView(name);
   }
 });
