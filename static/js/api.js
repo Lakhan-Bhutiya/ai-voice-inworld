@@ -73,9 +73,19 @@ export function getHistory() {
   return request(`/api/history?sessionId=${encodeURIComponent(getSessionId())}`);
 }
 
-// Persisted usage totals: this session, all time, and per model.
+export function deleteHistoryEntry(renderId) {
+  return request(`/api/history/${encodeURIComponent(renderId)}`, { method: "DELETE" });
+}
+
+// Persisted usage totals: this session, all time, and per model. Money figures
+// are omitted by the backend unless you're signed in as an admin.
 export function getUsage() {
   return request(`/api/usage?sessionId=${encodeURIComponent(getSessionId())}`);
+}
+
+// Who's signed in, and whether they may see costs.
+export function getMe() {
+  return request("/api/me");
 }
 
 export function logout() {
@@ -91,4 +101,24 @@ export function cloneVoice({ file, displayName, languageCode = "en-US", transcri
   form.append("transcription", transcription);
   form.append("sessionId", getSessionId());
   return request("/api/voices/clone", { method: "POST", body: form });
+}
+
+// ---- Likes / favourites ----------------------------------------------------
+
+export function toggleLike({ itemType, itemId }) {
+  return request("/api/likes/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ itemType, itemId, sessionId: getSessionId() }),
+  });
+}
+
+export function getLikes(itemType) {
+  return request(`/api/likes?sessionId=${encodeURIComponent(getSessionId())}&itemType=${encodeURIComponent(itemType)}`);
+}
+
+// Deletes the voice at Inworld for real (not just from local tracking) —
+// irreversible, since the sample audio was never kept.
+export function deleteCustomVoice(voiceId) {
+  return request(`/api/voices/custom/${encodeURIComponent(voiceId)}`, { method: "DELETE" });
 }

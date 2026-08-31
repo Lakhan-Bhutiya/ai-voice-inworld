@@ -65,8 +65,9 @@
               <h1 class="hero-line">Generate speech that<br><span class="accent-mark">sounds human.</span></h1>
             </div>
             <div>
-              <p class="hero-sub">Type a script, pick from 281 real Inworld voices, and steer tone with
-                inline emotion tags or natural-language direction. <kbd class="mono">⌘⏎</kbd> to generate.</p>
+              <p class="hero-sub">Type a script, pick from <span id="voiceCountStudio">289</span> real Inworld
+                voices, and steer tone with inline emotion tags or natural-language direction.
+                <kbd class="mono">⌘⏎</kbd> to generate.</p>
             </div>
           </div>
 
@@ -85,6 +86,13 @@
                   <button type="button" class="btn-outline" id="enhanceBtn">
                     <i class="fa-solid fa-wand-magic-sparkles"></i> Enhance with AI
                   </button>
+                  <div class="pause-group" data-tag-group role="group" aria-label="Insert a pause">
+                    <span class="micro pause-group-label">Pause</span>
+                    <button type="button" class="pill" data-insert='<break time="0.3s"/>'>0.3s</button>
+                    <button type="button" class="pill" data-insert='<break time="0.5s"/>'>0.5s</button>
+                    <button type="button" class="pill" data-insert='<break time="1s"/>'>1s</button>
+                    <button type="button" class="pill" data-insert='<break time="2s"/>'>2s</button>
+                  </div>
                 </div>
 
                 <div class="micro mt-3 mb-1">Emotion tags click to insert before the phrase it should affect</div>
@@ -105,14 +113,6 @@
                   <button type="button" class="pill">[cough]</button>
                 </div>
 
-                <div class="micro mt-3 mb-1">Pauses insert a silence at the cursor (SSML break)</div>
-                <div class="tag-row" data-tag-group>
-                  <button type="button" class="pill" data-insert='<break time="0.3s"/>'>· 0.3s</button>
-                  <button type="button" class="pill" data-insert='<break time="0.5s"/>'>·· 0.5s</button>
-                  <button type="button" class="pill" data-insert='<break time="1s"/>'>··· 1s</button>
-                  <button type="button" class="pill" data-insert='<break time="2s"/>'>2s pause</button>
-                </div>
-
                 <div class="micro mt-3 mb-1">Global direction natural-language tone, best with tts-2 (optional)</div>
                 <input id="directionInput" class="direction-input"
                   placeholder="e.g. speak sadly as if something bad just happened" />
@@ -129,8 +129,50 @@
               <div class="panel" id="studioVoicePanel">
                 <div class="panel-head">
                   <h2 class="section-title"><span class="index">02</span>Voice</h2>
-                  <span class="micro mono" data-role="voice-count"> of </span>
+                  <div class="d-flex align-items-center gap-2">
+                    <span class="micro mono" data-role="voice-count"> of </span>
+                    <button type="button" class="btn-outline" data-bs-toggle="offcanvas"
+                      data-bs-target="#cloneOffcanvas" aria-controls="cloneOffcanvas">
+                      <i class="fa-solid fa-clone" aria-hidden="true"></i> Clone voice
+                    </button>
+                  </div>
                 </div>
+
+                <details class="disclosure" id="advancedDisclosure">
+                  <summary class="disclosure-summary">
+                    <span class="disclosure-summary-left">
+                      <i class="fa-solid fa-chevron-right disclosure-chevron" aria-hidden="true"></i>
+                      Advanced delivery
+                    </span>
+                    <span class="disclosure-summary-value" id="advancedSummary">tts-1.5-max · 1.0× · v1.0</span>
+                  </summary>
+                  <div class="disclosure-body">
+                    <div>
+                      <label class="micro d-block mb-1" id="modelSegLabel">Model</label>
+                      <div class="seg" id="modelSeg" role="radiogroup" aria-labelledby="modelSegLabel"></div>
+                    </div>
+                    <div class="mt-3">
+                      <label class="micro d-block mb-1" id="deliverySegLabel">Delivery <span
+                          class="disclosure-field-hint" id="deliveryHint">tts-2 only</span></label>
+                      <div class="seg" id="deliverySeg" role="radiogroup" aria-labelledby="deliverySegLabel"></div>
+                    </div>
+                    <div class="disclosure-row">
+                      <div>
+                        <label class="micro d-block mb-1" for="speedInput">Speed
+                          <span class="mono" id="speedVal">1.0×</span></label>
+                        <input id="speedInput" type="range" min="0.5" max="1.5" step="0.1" value="1"
+                          class="ctrl-range" aria-valuetext="1.0 times normal speed" />
+                      </div>
+                      <div>
+                        <label class="micro d-block mb-1" for="tempInput">Variation
+                          <span class="mono" id="tempVal">1.0</span></label>
+                        <input id="tempInput" type="range" min="0" max="2" step="0.1" value="1" class="ctrl-range"
+                          aria-valuetext="1.0" />
+                        <span class="disclosure-field-hint" id="variationHint">ignored on tts-2</span>
+                      </div>
+                    </div>
+                  </div>
+                </details>
 
                 <div class="voice-search-wrap">
                   <i class="fa-solid fa-magnifying-glass"></i>
@@ -142,44 +184,12 @@
                 <div class="facet-group" data-role="facets-tag"></div>
 
                 <div class="voice-list" data-role="voice-list" aria-label="Voice"></div>
-
-                <div class="row g-2 mt-1">
-                  <div class="col-6">
-                    <label class="micro d-block mb-1">Model</label>
-                    <select id="modelSelect" class="direction-input"
-                      style="padding:9px 12px; font-size: var(--fs-small);">
-                      <option value="inworld-tts-1.5-max">tts-1.5-max (quality)</option>
-                      <option value="inworld-tts-1.5-mini">tts-1.5-mini (fast)</option>
-                      <option value="inworld-tts-2">tts-2 (newest)</option>
-                    </select>
-                  </div>
-                  <div class="col-6">
-                    <label class="micro d-block mb-1">Delivery <span class="micro">tts-2</span></label>
-                    <select id="deliverySelect" class="direction-input"
-                      style="padding:9px 12px; font-size: var(--fs-small);">
-                      <option value="">Default</option>
-                      <option value="STABLE">Stable</option>
-                      <option value="BALANCED">Balanced</option>
-                      <option value="CREATIVE">Creative</option>
-                    </select>
-                  </div>
-                  <div class="col-6">
-                    <label class="micro d-block mb-1">Speed <span class="mono" id="speedVal">1.0×</span></label>
-                    <input id="speedInput" type="range" min="0.5" max="1.5" step="0.1" value="1"
-                      class="ctrl-range" />
-                  </div>
-                  <div class="col-6">
-                    <label class="micro d-block mb-1">Variation <span class="mono" id="tempVal">1.0</span></label>
-                    <input id="tempInput" type="range" min="0" max="2" step="0.1" value="1"
-                      class="ctrl-range" />
-                  </div>
-                </div>
               </div>
             </div>
           </div>
 
           <div id="historySection">
-            <div class="micro mt-2" id="historyLabel" style="display:none;">This session's renders</div>
+            <div class="history-filter-bar" id="historyFilterBar"></div>
             <div class="history-strip" id="historyStrip"></div>
           </div>
 
@@ -192,7 +202,8 @@
               <div class="dock-body">
                 <div class="dock-meta">
                   <span class="dock-meta-label" id="dockMetaLabel">Ready to generate</span>
-                  <span class="dock-meta-usage" id="dockMetaUsage"></span>
+                  <span class="dock-meta-usage" id="dockMetaUsage" hidden></span>
+                  <span class="dock-meta-estimate" id="dockMetaEstimate"></span>
                 </div>
                 <canvas class="dock-wave" id="dockWave"></canvas>
                 <div class="dock-time">
@@ -218,7 +229,8 @@
           <div class="hero">
             <div>
               <div class="hero-eyebrow"><span class="micro">02 · Voices</span></div>
-              <h1 class="hero-line">281 real voices,<br><span class="accent-mark">browse and filter.</span></h1>
+              <h1 class="hero-line"><span id="voiceCountVoices">289</span> real voices,<br><span
+                  class="accent-mark">browse and filter.</span></h1>
             </div>
             <div>
               <p class="hero-sub">Every voice below comes straight from the Inworld catalog pick one here
@@ -226,52 +238,16 @@
             </div>
           </div>
 
-          <div class="panel" id="cloneVoicePanel">
-            <div class="panel-head">
-              <h2 class="section-title"><i class="fa-solid fa-clone"></i>&nbsp;Clone your own voice</h2>
-              <span class="micro">5–15s sample · wav/mp3 · ≤4MB</span>
-            </div>
-            <div class="row g-2">
-              <div class="col-md-4">
-                <label class="micro d-block mb-1">Voice name</label>
-                <input id="cloneName" class="direction-input" placeholder="e.g. My Narrator" />
-              </div>
-              <div class="col-md-3">
-                <label class="micro d-block mb-1">Language</label>
-                <input id="cloneLang" class="direction-input" value="en-US" />
-              </div>
-              <div class="col-md-5">
-                <label class="micro d-block mb-1">Audio sample — record or upload</label>
-                <div class="clone-sample-row">
-                  <button type="button" class="btn-outline" id="recordBtn">
-                    <i class="fa-solid fa-microphone"></i> Record
-                  </button>
-                  <span class="micro mono" id="recordTimer">0s</span>
-                  <input id="cloneFile" class="direction-input clone-file" type="file"
-                    accept="audio/wav,audio/mpeg,audio/webm,.wav,.mp3,.webm" />
-                </div>
-                <audio id="recordPreview" class="clone-preview" controls style="display:none;"></audio>
-              </div>
-            </div>
-            <div class="clone-read-prompt" id="readPrompt">
-              <span class="micro"><i class="fa-solid fa-book-open"></i> For the best match, read this aloud clearly while recording:</span>
-              <p class="read-prompt-text" id="readPromptText"></p>
-            </div>
-
-            <label class="micro d-block mb-1 mt-2">Transcription — the exact words in your sample (auto-filled if you read the line above)</label>
-            <input id="cloneTranscript" class="direction-input" placeholder="Exactly what is said in the sample…" />
-            <div class="field-foot mt-2">
-              <button type="button" class="btn-outline" id="cloneBtn">
-                <i class="fa-solid fa-clone"></i> Clone voice
-              </button>
-              <span class="micro" id="cloneStatus"></span>
-            </div>
-          </div>
-
           <div class="panel" id="voicesGridPanel">
             <div class="panel-head">
               <h2 class="section-title">All voices</h2>
-              <span class="micro mono" data-role="voice-count"> of </span>
+              <div class="d-flex align-items-center gap-2">
+                <span class="micro mono" data-role="voice-count"> of </span>
+                <button type="button" class="btn-outline" data-bs-toggle="offcanvas" data-bs-target="#cloneOffcanvas"
+                  aria-controls="cloneOffcanvas">
+                  <i class="fa-solid fa-clone"></i> Clone a voice
+                </button>
+              </div>
             </div>
             <div class="voice-search-wrap">
               <i class="fa-solid fa-magnifying-glass"></i>
@@ -392,6 +368,85 @@
     <button type="button" class="mnav-link theme-toggle-btn" id="mobileThemeToggle" aria-label="Toggle theme"><i
         class="fa-solid fa-moon"></i></button>
   </nav>
+
+  <!-- Clone-a-voice drawer -->
+  <div class="offcanvas offcanvas-end" tabindex="-1" id="cloneOffcanvas" aria-labelledby="cloneOffcanvasLabel">
+    <div class="offcanvas-header">
+      <h2 class="offcanvas-title" id="cloneOffcanvasLabel"><i class="fa-solid fa-clone"></i>&nbsp;Clone a voice</h2>
+      <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body">
+      <p class="text-muted-2" style="font-size:var(--fs-small); margin:0 0 18px;">5–15s sample · wav/mp3/webm ·
+        ≤4MB. Record straight from your mic, or drop a file.</p>
+
+      <label class="micro d-block mb-1" for="cloneName">Voice name</label>
+      <input id="cloneName" class="direction-input" placeholder="e.g. My Narrator" />
+
+      <label class="micro d-block mb-1 mt-3" for="cloneLang">Language</label>
+      <input id="cloneLang" class="direction-input" value="en-US" />
+
+      <span class="micro d-block mb-1 mt-3" id="cloneSampleLabel">Audio sample</span>
+      <div class="rec-control">
+        <button type="button" class="btn-outline rec-btn" id="recordBtn" aria-describedby="cloneSampleLabel">
+          <i class="fa-solid fa-microphone"></i> Record
+        </button>
+        <canvas class="rec-meter" id="recMeter" aria-hidden="true" hidden></canvas>
+        <span class="micro mono rec-timer" id="recordTimer" aria-live="polite" hidden>0:00</span>
+      </div>
+
+      <label class="file-drop mt-2" id="fileDrop">
+        <input id="cloneFile" type="file" accept="audio/wav,audio/mpeg,audio/webm,.wav,.mp3,.webm" />
+        <div id="fileDropIdle">
+          <div class="file-drop-icon"><i class="fa-solid fa-arrow-up-from-bracket"></i></div>
+          <div class="file-drop-text">Drop an audio file, or click to browse</div>
+          <div class="file-drop-hint">wav, mp3, or webm — 5 to 15 seconds</div>
+        </div>
+        <div class="file-drop-filled" id="fileDropFilled" hidden>
+          <i class="fa-solid fa-file-audio" aria-hidden="true"></i>
+          <span class="file-drop-filename" id="fileDropName"></span>
+          <span class="file-drop-meta" id="fileDropSize"></span>
+          <button type="button" class="file-drop-remove" id="fileDropRemove" aria-label="Remove sample">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </label>
+
+      <div class="clone-preview-block" id="clonePreviewBlock" hidden>
+        <button type="button" class="clone-preview-play" id="clonePreviewPlay" aria-label="Play sample">
+          <i class="fa-solid fa-play"></i>
+        </button>
+        <div class="clone-preview-body">
+          <canvas class="clone-preview-wave" id="clonePreviewWave"></canvas>
+          <div class="clone-preview-meta">
+            <span id="clonePreviewTime">0:00</span>
+            <span id="clonePreviewDuration">0:00</span>
+          </div>
+        </div>
+        <button type="button" class="clone-preview-rerecord" id="cloneRerecordBtn" aria-label="Re-record sample">
+          <i class="fa-solid fa-rotate-right"></i>
+        </button>
+      </div>
+
+      <label class="micro d-block mb-1 mt-3" for="cloneTranscript">Transcription (optional, improves quality)</label>
+      <input id="cloneTranscript" class="direction-input" placeholder="Exactly what is said in the sample…" />
+
+      <div class="field-foot">
+        <button type="button" class="btn-lime" id="cloneBtn">
+          <i class="fa-solid fa-clone"></i> Clone voice
+        </button>
+        <span class="micro" id="cloneStatus" role="status"></span>
+      </div>
+
+      <div class="clone-success-actions" id="cloneSuccessActions" hidden>
+        <button type="button" class="btn-outline" id="cloneSuccessPreview">
+          <i class="fa-solid fa-play"></i> Preview
+        </button>
+        <button type="button" class="btn-lime" id="cloneSuccessUse">
+          Use this voice
+        </button>
+      </div>
+    </div>
+  </div>
 
   <div class="toast-stack" id="toastStack" aria-live="polite"></div>
 

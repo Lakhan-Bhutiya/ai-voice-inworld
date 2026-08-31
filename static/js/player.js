@@ -206,5 +206,11 @@ export function createPlayer({ canvas, playBtn, timeCurrent, timeTotal }) {
     isPlaying: () => isPlaying,
     isDormant: () => dormant,
     getAudioUrl: () => audioEl.src,
+    // Exposed so another feature can draw its own thing on this canvas from
+    // the same source data (e.g. clone.js's cloning-in-progress scan, drawn
+    // over the sample's own waveform instead of a generic spinner) without
+    // re-decoding the audio a second time.
+    getPeaks: () => peaks,
+    redraw,
   };
 }

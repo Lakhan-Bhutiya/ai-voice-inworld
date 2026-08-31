@@ -73,11 +73,13 @@ Response:
 `usageTotals` (same shape as `GET /api/usage`) carries the refreshed running totals.
 
 ### Session history & custom voices
-- `GET /api/history?sessionId=…` → `{ history: [{ renderId, text, voiceId, voiceName, modelId, audioUrl, charsBilled, createdAt }] }`
+- `GET /api/history?sessionId=…` → `{ history: [{ renderId, text, voiceId, voiceName, modelId, audioUrl, charsBilled, createdAt }], enhanceCount: number }`. `enhanceCount` is this session's total billed Enhance calls — use it with the `charsBilled` in `history` to rebuild session stats after a reload instead of keeping an in-memory counter.
 - `GET /api/audio/{renderId}` → the stored audio file (replay without re-billing)
 - `DELETE /api/history/{renderId}`
-- `POST /api/voices/clone` (multipart: `file`, `displayName`, `languageCode`, `transcription?`, `sessionId?`) → clone a voice from a 5–15s sample (wav/mp3/webm, ≤4MB). Cloned voices appear first in `GET /api/voices` with `"custom": true`.
-- `GET /api/voices/custom` · `DELETE /api/voices/custom/{voiceId}`
+- `POST /api/voices/clone` (multipart: `file`, `displayName`, `languageCode`, `transcription?`, `sessionId?`) → clone a voice from a 5–15s sample (wav/mp3/webm, ≤4MB). Cloned voices appear first in `GET /api/voices` with `"isCustom": true` (matches the field Inworld's own catalog uses for previously-cloned voices, so the client can treat both the same way).
+- `GET /api/voices/custom` — lists just this app's locally-tracked clones (a subset of what's cloned on the Inworld account — see `isCustom` above for the full picture).
+- `DELETE /api/voices/custom/{voiceId}` → **deletes the voice for real, at Inworld** (not just from local tracking). Only works on voices that are actually owned + IVC-cloned on the account — `403` otherwise. Irreversible; the sample audio was never kept, so there's no way to re-clone it identically. `404` if the voice doesn't exist on the account at all.
+- `GET /api/voices/preview?voiceId=…&modelId=…` → a short, Inworld-picked sample line for any voice (built-in or cloned). Returns raw `audio/mpeg` (not JSON), cached for a day — **not metered or billed**, safe to call on every hover/click while browsing.
 
 ### `GET /api/usage?sessionId=…`
 Persisted spend — every TTS render and enhance call is priced and stored, so
@@ -95,10 +97,12 @@ these totals survive reloads and restarts.
 Inserts emotion/non-verbal tags into the text via gpt-4o-mini.
 ```json
 // request
-{ "text": "I got the job but my friend moved away" }
+{ "text": "I got the job but my friend moved away", "sessionId": "abc123" }
 // response
 { "enhanced": "[happy] I got the job [sad] but my friend moved away.", "usageTotals": { … } }
 ```
+`sessionId` is optional; pass it to count this billed call toward that session's
+Costs stats (see `enhanceCount` below).
 
 ---
 

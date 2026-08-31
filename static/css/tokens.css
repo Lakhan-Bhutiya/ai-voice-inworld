@@ -19,6 +19,20 @@
   --danger: #c8402a;
   --shadow-sm: 0 1px 2px rgba(16, 16, 16, 0.05);
   --shadow-md: 0 4px 20px rgba(16, 16, 16, 0.08);
+
+  /* Native-control replacements (range sliders, file drop, record state).
+     Never lime-on-surface — see the ::selection comment in base.css. The
+     range fill/thumb use --ink so they stay legible on --surface; --accent
+     is reserved for the pill/active-state fill role. */
+  --ctrl-track: var(--surface-2);
+  --ctrl-track-fill: var(--ink);
+  --ctrl-thumb: var(--surface);
+  --ctrl-thumb-ring: var(--ink);
+  --drop-idle: var(--line-strong);
+  --drop-active: var(--accent);
+  --rec: var(--danger);
+  --rec-ink: var(--block-ink);
+  --rec-glow: color-mix(in srgb, var(--danger) 45%, transparent);
 }
 
 :root[data-bs-theme="dark"] {

@@ -17,6 +17,10 @@
   --bs-emphasis-color: var(--ink);
   --bs-secondary-color: var(--ink-2);
   --bs-tertiary-bg: var(--surface-2);
+  --bs-offcanvas-bg: var(--surface);
+  --bs-offcanvas-color: var(--ink);
+  --bs-offcanvas-border-color: var(--line);
+  --bs-offcanvas-width: 420px;
 }
 
 * {

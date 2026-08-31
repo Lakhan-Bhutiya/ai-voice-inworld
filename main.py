@@ -186,6 +186,12 @@ class EnhanceRequest(BaseModel):
     sessionId: str | None = None
 
 
+class LikeRequest(BaseModel):
+    itemType: str = Field(..., pattern="^(voice|render)$")
+    itemId: str = Field(..., min_length=1)
+    sessionId: str | None = None
+
+
 def _auth_headers() -> dict:
     if not API_KEY:
         raise HTTPException(
@@ -227,12 +233,59 @@ async def _fetch_catalog() -> list:
     return _catalog_cache
 
 
+def _invalidate_catalog_cache() -> None:
+    """Force the next /api/voices call to re-fetch from Inworld.
+
+    Only needed after a delete — a deleted voice must stop appearing once
+    the cache would otherwise resurface it (e.g. after a server restart).
+    A clone doesn't need this: the local `custom_voices` table already
+    surfaces new clones immediately via the merge in list_voices() below,
+    without paying for a full catalog re-fetch.
+    """
+    global _catalog_cache
+    _catalog_cache = None
+
+
 @app.get("/api/voices")
 async def list_voices():
-    """Custom (cloned) voices first, then Inworld's built-in catalog."""
+    """Custom (cloned) voices first, then Inworld's built-in catalog.
+
+    Inworld's own catalog can already contain voices cloned earlier (it's
+    fetched fresh from the account, not scoped to this app) — and our local
+    `custom` table exists precisely so a brand-new clone shows up before the
+    in-process catalog cache would ever refresh. Dedupe by voiceId so a voice
+    that has landed in both places (e.g. after a server restart re-fetches
+    the catalog) isn't listed twice.
+    """
     catalog = await _fetch_catalog()
     custom = await db.list_custom_voices()
-    return {"voices": custom + catalog}
+    custom_ids = {v["voiceId"] for v in custom}
+    return {"voices": custom + [v for v in catalog if v.get("voiceId") not in custom_ids]}
+
+
+@app.get("/api/voices/preview")
+async def voice_preview(voiceId: str, modelId: str = "inworld-tts-1.5-max"):
+    """A short, server-picked sample line for a voice — Inworld's
+    tts/v1/voice:preview endpoint, which the docs state is not metered or
+    billed, unlike /tts/v1/voice. Returned as raw audio (not JSON/base64) so
+    the browser's own HTTP cache handles repeat plays for free.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{INWORLD_BASE}/tts/v1/voice:preview",
+            params={"voice_id": voiceId, "model_id": modelId},
+            headers=_auth_headers(),
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+    audio_b64 = resp.json().get("audioContent")
+    if not audio_b64:
+        raise HTTPException(status_code=502, detail="No audioContent in preview response")
+    return Response(
+        content=base64.b64decode(audio_b64),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.post("/api/synthesize")
@@ -375,8 +428,17 @@ async def enhance(req: EnhanceRequest):
 
 @app.get("/api/history")
 async def get_history(sessionId: str, limit: int = 50):
-    """Past renders for a browser session (newest first), for restore on reload."""
-    return {"history": await db.list_renders(sessionId, limit)}
+    """Past renders for a browser session (newest first), for restore on reload.
+
+    Also returns enhanceCount so the Costs view's stats can be rebuilt from
+    what was actually billed instead of an in-memory counter that resets on
+    every page load.
+    """
+    return {
+        "history": await db.list_renders(sessionId, limit),
+        "enhanceCount": await db.count_enhance_calls(sessionId),
+        "likedRenderIds": await db.list_likes(sessionId, "render"),
+    }
 
 
 @app.get("/api/usage")
@@ -399,6 +461,24 @@ async def delete_history(render_id: str):
     if not await db.delete_render(render_id):
         raise HTTPException(status_code=404, detail="Render not found")
     return {"deleted": render_id}
+
+
+# ---- Likes / favourites -------------------------------------------------------
+
+
+@app.post("/api/likes/toggle")
+async def toggle_like(req: LikeRequest):
+    if not req.sessionId:
+        raise HTTPException(status_code=400, detail="sessionId is required")
+    liked = await db.toggle_like(req.sessionId, req.itemType, req.itemId)
+    return {"liked": liked, "itemType": req.itemType, "itemId": req.itemId}
+
+
+@app.get("/api/likes")
+async def get_likes(sessionId: str, itemType: str):
+    if itemType not in ("voice", "render"):
+        raise HTTPException(status_code=400, detail="itemType must be 'voice' or 'render'")
+    return {"likes": await db.list_likes(sessionId, itemType)}
 
 
 # ---- Custom voice cloning ----------------------------------------------------
@@ -452,7 +532,9 @@ async def clone_voice(
         "voiceId": voice_id,
         "displayName": voice.get("displayName") or displayName,
         "languages": [voice.get("languageCode") or languageCode],
-        "custom": True,
+        "description": None,
+        "tags": [],
+        "isCustom": True,
     }
 
 
@@ -463,8 +545,43 @@ async def list_custom():
 
 @app.delete("/api/voices/custom/{voice_id}")
 async def delete_custom(voice_id: str):
-    if not await db.delete_custom_voice(voice_id):
-        raise HTTPException(status_code=404, detail="Custom voice not found")
+    """Delete a cloned voice for real — at Inworld, not just our local row.
+
+    The old version only ran `DELETE FROM custom_voices`: the voice stayed
+    in the Inworld account and came right back the next time the catalog
+    cache refreshed (e.g. a server restart). Before deleting, verify via
+    Inworld's own record that this voice is actually owned and IVC-cloned
+    (not a built-in catalog voice) — voiceId alone isn't a trustworthy
+    enough gate for a destructive call.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.get(
+            f"{INWORLD_BASE}/voices/v1/voices/{voice_id}", headers=_auth_headers()
+        )
+    if resp.status_code == 404:
+        # Not at Inworld at all — clean up a possible orphan local row.
+        if not await db.delete_custom_voice(voice_id):
+            raise HTTPException(status_code=404, detail="Voice not found")
+        return {"deleted": voice_id}
+    if resp.status_code != 200:
+        raise HTTPException(status_code=resp.status_code, detail=resp.text)
+
+    voice = resp.json()
+    if not voice.get("owned") or voice.get("source") != "IVC":
+        raise HTTPException(
+            status_code=403,
+            detail="Only voices you cloned can be deleted.",
+        )
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        del_resp = await client.delete(
+            f"{INWORLD_BASE}/voices/v1/voices/{voice_id}", headers=_auth_headers()
+        )
+    if del_resp.status_code != 200:
+        raise HTTPException(status_code=del_resp.status_code, detail=del_resp.text)
+
+    await db.delete_custom_voice(voice_id)  # best-effort; may not have a local row
+    _invalidate_catalog_cache()
     return {"deleted": voice_id}
 
 

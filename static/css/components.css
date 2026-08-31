@@ -190,6 +190,12 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Structural: two panels can never end up touching, regardless of which
+   layout (Bootstrap row gutters, a bare stack) puts them next to each other. */
+.panel + .panel {
+  margin-top: 20px;
+}
+
 .panel-head {
   display: flex;
   align-items: baseline;
@@ -282,6 +288,148 @@
   opacity: 0.65;
 }
 
+/* The Custom-voices filter pill — an accent outline it keeps even when
+   inactive, so it reads as a different axis from the plain language pills
+   next to it (same visual key as .badge-custom on the rows themselves). */
+.pill-accent {
+  border-color: var(--accent);
+}
+.pill-accent:hover {
+  border-color: var(--accent);
+}
+
+/* ---- Segmented control (replaces native <select> for small enumerable
+   choices — Model, Delivery — so they read as the same hand-drawn language
+   as the rest of the app instead of OS chrome). ------------------------- */
+
+.seg {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+}
+.seg-opt {
+  flex: 1 1 auto;
+  border: none;
+  background: transparent;
+  color: var(--ink-2);
+  font-family: inherit;
+  font-weight: 600;
+  font-size: var(--fs-small);
+  padding: 7px 10px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  text-align: center;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.seg-opt:hover:not(:disabled) {
+  color: var(--ink);
+}
+.seg-opt.active {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.seg-opt:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.seg-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---- Disclosure (Advanced delivery controls) --------------------------- */
+
+.disclosure {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  margin-bottom: 14px;
+  background: var(--surface-2);
+}
+.disclosure-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--fs-small);
+  font-weight: 700;
+  color: var(--ink);
+}
+.disclosure-summary::-webkit-details-marker {
+  display: none;
+}
+.disclosure-summary-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.disclosure-chevron {
+  font-size: 11px;
+  color: var(--ink-3);
+  transition: transform var(--dur-fast) var(--ease);
+}
+.disclosure[open] .disclosure-chevron {
+  transform: rotate(90deg);
+}
+.disclosure-summary-value {
+  font-family: var(--font-mono);
+  font-size: var(--fs-small);
+  color: var(--ink-3);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.disclosure-body {
+  padding: 4px 14px 16px;
+  border-top: 1px solid var(--line);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .disclosure[open] .disclosure-body {
+    animation: view-in 180ms var(--ease);
+  }
+}
+.disclosure-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+.disclosure-field-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--ink-3);
+  font-size: var(--fs-micro);
+}
+
+.filter-disclosure-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 10px;
+  width: 100%;
+}
+.filter-disclosure-row .filter-disclosure {
+  margin-bottom: 0;
+}
+.filter-disclosure {
+  margin-bottom: 10px;
+}
+.filter-disclosure .disclosure-body {
+  padding: 12px 14px;
+}
+.filter-disclosure .facet-group {
+  margin-bottom: 0;
+}
+
 /* ---- Dark block (player chrome) ------------------------------------------ */
 
 .block {
@@ -320,7 +468,7 @@
 
 .script-field {
   width: 100%;
-  background: #bdb1b124;
+  background: var(--surface-2);
   border: none;
   color: var(--ink);
   font-family: var(--font-body);
@@ -352,6 +500,18 @@
   flex-wrap: wrap;
   gap: 8px;
   margin-top: 14px;
+}
+
+/* Pause chips ride in the field-foot toolbar next to Enhance, instead of
+   claiming a whole extra stacked row above the emotion/non-verbal chips. */
+.pause-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pause-group-label {
+  color: var(--ink-3);
 }
 
 /* Tactile press feedback, applied briefly on click via JS. */
@@ -439,15 +599,17 @@
   padding: 0 8px;
 }
 
+/* A row is a non-interactive wrapper around a select button plus 1-2 action
+   buttons (preview, delete) — kept as siblings, never nested <button>s
+   (invalid HTML, unpredictable click/focus behavior). The wrapper itself
+   carries the hover/selected chrome so it still highlights as one unit. */
 .voice-row {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
   padding: 10px;
   border-radius: var(--radius-md);
   border: 1px solid transparent;
-  cursor: pointer;
-  text-align: left;
   background: transparent;
   width: 100%;
   transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
@@ -459,9 +621,30 @@
   background: var(--surface-2);
   border-color: var(--accent);
 }
-.voice-row:focus-visible {
+.voice-row-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.voice-row-main:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -2px;
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.voice-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
 }
 
 .voice-avatar {
@@ -486,24 +669,33 @@
 .voice-info {
   min-width: 0;
   flex: 1;
+  overflow: hidden;
 }
 .voice-info-top {
   display: flex;
   align-items: baseline;
   gap: 8px;
+  min-width: 0;
 }
 .voice-name {
   font-weight: 700;
   font-size: var(--fs-body);
   color: var(--ink);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .voice-lang {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   color: var(--ink-3);
   text-transform: uppercase;
+  flex: 0 0 auto;
 }
 .voice-desc {
+  display: block; /* a <span> defaults to inline, where overflow/text-overflow
+                      below are inert — this is what makes them actually apply */
   font-size: var(--fs-small);
   color: var(--ink-2);
   overflow: hidden;
@@ -521,6 +713,95 @@
   opacity: 1;
 }
 
+/* Shared small round icon button — voice preview, and (custom voices only)
+   delete. Same family as .dock-btn / .history-item-remove, scaled down for
+   a row that already carries an avatar, text, and a checkmark. */
+.voice-icon-btn {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink-3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.voice-icon-btn:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.voice-icon-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.voice-icon-btn.is-playing {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.voice-row-delete:hover {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.voice-row-confirm {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  animation: chip-pop 200ms var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-row-confirm { animation: none; }
+}
+.voice-row-confirm button {
+  border: none;
+  background: transparent;
+  font-size: var(--fs-micro);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-micro);
+  padding: 6px 7px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.voice-row-confirm-yes {
+  color: var(--danger);
+}
+.voice-row-confirm-yes:hover {
+  background: var(--surface-2);
+}
+.voice-row-confirm-no {
+  color: var(--ink-3);
+}
+.voice-row-confirm-no:hover {
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+/* An outlined lime stroke (not a lime fill) marks a cloned voice — keeps full
+   text contrast while still reading as "yours" via the accent color. */
+.badge-custom {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-micro);
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-pill);
+  padding: 2px 8px;
+}
+
 .voice-empty {
   padding: 24px 8px;
   text-align: center;
@@ -532,6 +813,55 @@
   padding: 10px 8px 2px;
   color: var(--ink-3);
   font-size: var(--fs-small);
+}
+
+/* Quiet footer prompt at the end of every voice list/grid — the
+   moment-of-need nudge toward cloning, deliberately unlike a selectable row
+   (no avatar, muted, top hairline) so it reads as a footer, not an option. */
+.voice-list-cta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 12px 10px 8px;
+  border: none;
+  border-top: 1px solid var(--line);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.voice-list-cta-q {
+  font-size: var(--fs-micro);
+  color: var(--ink-3);
+}
+.voice-list-cta-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-small);
+  font-weight: 700;
+  color: var(--ink-2);
+  transition: color var(--dur-fast) var(--ease);
+}
+.voice-list-cta-action i {
+  font-size: 11px;
+  color: var(--ink-3);
+  transition: transform var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.voice-list-cta:hover .voice-list-cta-action,
+.voice-list-cta:focus-visible .voice-list-cta-action {
+  color: var(--ink);
+}
+.voice-list-cta:hover .voice-list-cta-action i,
+.voice-list-cta:focus-visible .voice-list-cta-action i {
+  color: var(--ink-2);
+  transform: translateX(3px);
+}
+.voice-list-cta:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
 }
 
 /* Staggered reveal when the filtered set changes. */
@@ -554,12 +884,11 @@
 }
 
 .voice-card {
-  text-align: left;
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   padding: 16px;
-  cursor: pointer;
   transition: border-color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
 .voice-card:hover {
@@ -569,8 +898,32 @@
 .voice-card.selected {
   border-color: var(--accent);
 }
+.voice-card-main {
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.voice-card-main:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+.voice-card-actions {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 4px;
+}
 .voice-card .voice-info-top {
   margin-bottom: 6px;
+  padding-right: 68px; /* clears the absolute preview/delete overlay in the corner */
 }
 .voice-card .voice-desc {
   white-space: normal;
@@ -666,6 +1019,12 @@
   color: var(--block-ink-3);
   white-space: nowrap;
 }
+.dock-meta-estimate {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--block-ink-3);
+  white-space: nowrap;
+}
 .dock-wave {
   width: 100%;
   height: 34px;
@@ -715,23 +1074,39 @@
   gap: 10px;
   overflow-x: auto;
   padding: 4px 2px 12px;
+}
+.history-strip:not(:empty) {
   margin-top: 20px;
+}
+.history-empty {
+  color: var(--ink-3);
+  font-size: var(--fs-small);
+  padding: 4px 2px;
 }
 .history-item {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--radius-pill);
-  padding: 8px 14px 8px 8px;
-  cursor: pointer;
+  padding: 6px 8px 6px 8px;
   transition: transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 }
 .history-item:hover {
   transform: translateY(-2px);
   border-color: var(--line-strong);
+}
+.history-item-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px 0 2px 2px;
+  text-align: left;
 }
 .history-item .voice-avatar {
   width: 26px;
@@ -750,6 +1125,25 @@
 .history-item-play {
   color: var(--ink-3);
   font-size: 11px;
+}
+.history-item-remove {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.history-item-remove:hover {
+  background: var(--surface-2);
+  color: var(--danger);
 }
 
 /* ---- Costs view ------------------------------------------------------------- */
@@ -910,6 +1304,8 @@
   .app-shell { flex-direction: column; }
   .main { padding: 16px 14px 84px; }
   .dock-wrap { bottom: 64px; }
+  :root { --bs-offcanvas-width: 100vw; }
+  .disclosure-row { grid-template-columns: 1fr; }
 }
 
 .mobile-nav {
@@ -943,36 +1339,389 @@
   background: var(--block-accent);
 }
 
-/* ---- Voice clone: record/upload row ------------------------------------ */
-.clone-sample-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.clone-file { flex: 1 1 160px; min-width: 140px; }
-.clone-preview { width: 100%; margin-top: 10px; }
-#recordBtn.is-recording {
-  color: #fff; border-color: #e5484d; background: #e5484d;
-  animation: recPulse 1.2s ease-in-out infinite;
-}
-@keyframes recPulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 72, 77, 0.5); }
-  50%      { box-shadow: 0 0 0 6px rgba(229, 72, 77, 0); }
-}
+/* ---- Delivery control range sliders ------------------------------------
+   appearance:none turns the whole element into the track, so the "filled"
+   portion is drawn as a background gradient stopping at --pct (a custom
+   property the JS sets on input, since no cross-browser CSS-only way to
+   read a range's own value exists). Thumb is styled separately per engine
+   (::-webkit-slider-thumb / ::-moz-range-thumb) since there's no shared
+   pseudo-element for it. */
 
-/* ---- Delivery control range sliders ------------------------------------ */
 .ctrl-range {
-  width: 100%; margin-top: 6px; accent-color: var(--accent, #6c5ce7);
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  margin: 6px 0 0;
+  background: transparent;
   cursor: pointer;
 }
-
-/* ---- Voice clone: read-aloud prompt ------------------------------------ */
-.clone-read-prompt {
-  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
-  background: rgba(108, 92, 231, 0.08);
-  border: 1px dashed rgba(108, 92, 231, 0.4);
+.ctrl-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: linear-gradient(to right,
+    var(--ctrl-track-fill) var(--pct, 0%),
+    var(--ctrl-track) var(--pct, 0%));
 }
-.read-prompt-text {
-  margin: 6px 0 0; font-family: var(--font-display, inherit);
-  font-size: var(--fs-small, 0.9rem); line-height: 1.5; font-style: italic;
+.ctrl-range::-moz-range-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: linear-gradient(to right,
+    var(--ctrl-track-fill) var(--pct, 0%),
+    var(--ctrl-track) var(--pct, 0%));
+}
+.ctrl-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  margin-top: -7px;
+  border-radius: 50%;
+  background: var(--ctrl-thumb);
+  border: 2px solid var(--ctrl-thumb-ring);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.ctrl-range::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ctrl-thumb);
+  border: 2px solid var(--ctrl-thumb-ring);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.ctrl-range:hover:not(:disabled)::-webkit-slider-thumb { transform: scale(1.08); }
+.ctrl-range:hover:not(:disabled)::-moz-range-thumb { transform: scale(1.08); }
+.ctrl-range:focus-visible { outline: none; }
+.ctrl-range:focus-visible::-webkit-slider-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ctrl-range:focus-visible::-moz-range-thumb { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ctrl-range:disabled { cursor: not-allowed; opacity: 0.45; }
+.ctrl-range:disabled::-webkit-slider-thumb { cursor: not-allowed; }
+.ctrl-range:disabled::-moz-range-thumb { cursor: not-allowed; }
+
+/* ---- File drop (voice clone sample upload) ------------------------------ */
+
+.file-drop {
+  display: block;
+  border: 2px dashed var(--drop-idle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  padding: 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+.file-drop:hover,
+.file-drop.drag-over {
+  border-color: var(--drop-active);
+}
+.file-drop input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+  padding: 0;
+  margin: -1px;
+}
+.file-drop-icon {
+  font-size: 18px;
+  color: var(--ink-3);
+  margin-bottom: 8px;
+}
+.file-drop-text {
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.file-drop-hint {
+  margin-top: 4px;
+  font-size: var(--fs-micro);
+  color: var(--ink-3);
+}
+.file-drop.has-file {
+  text-align: left;
+  cursor: default;
+  padding: 12px 14px;
+}
+/* :not([hidden]) — an unconditional `display: flex` here would outrank the
+   UA [hidden]{display:none} rule (equal specificity, author origin wins),
+   silently defeating `.hidden = true` from JS. */
+.file-drop-filled:not([hidden]) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.file-drop-filled i {
+  color: var(--ink-3);
+  font-size: 16px;
+  flex: 0 0 auto;
+}
+.file-drop-filename {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-small);
+  font-weight: 600;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-drop-meta {
+  font-size: var(--fs-micro);
+  color: var(--ink-3);
+}
+.file-drop-remove {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--ink-2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  transition: color var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.file-drop-remove:hover {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
+/* ---- Voice clone: record control + level meter --------------------------- */
+
+.rec-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.rec-btn.is-recording {
+  color: var(--rec-ink);
+  border-color: var(--rec);
+  background: var(--rec);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rec-btn.is-recording { animation: none; }
+}
+@keyframes rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--rec-glow); }
+  50%      { box-shadow: 0 0 0 6px transparent; }
+}
+.rec-meter {
+  flex: 1 1 120px;
+  height: 28px;
+  min-width: 80px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.rec-timer {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+}
+
+/* Compact reuse of the dock's dark waveform chrome for the clone sample
+   preview, so a recorded/uploaded sample looks like it belongs to the same
+   player system as the main dock rather than a second, different widget. */
+.clone-preview-block:not([hidden]) {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--block);
+  color: var(--block-ink);
+  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+  margin-top: 10px;
+}
+.clone-preview-play {
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: var(--block-accent);
+  color: var(--accent-ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease);
+}
+.clone-preview-play:hover { transform: scale(1.05); }
+.clone-preview-body {
+  flex: 1;
+  min-width: 0;
+}
+.clone-preview-wave {
+  width: 100%;
+  height: 26px;
+  display: block;
+  cursor: pointer;
+}
+.clone-preview-meta {
+  margin-top: 4px;
+  font-size: var(--fs-micro);
+  color: var(--block-ink-3);
+  display: flex;
+  justify-content: space-between;
+}
+.clone-preview-rerecord {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--block-line);
+  background: transparent;
+  color: var(--block-ink-2);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.clone-preview-rerecord:hover {
+  color: var(--block-ink);
+  border-color: var(--block-ink-2);
+}
+
+/* ---- Offcanvas (Clone-voice drawer) --------------------------------------- */
+
+.offcanvas-header {
+  border-bottom: 1px solid var(--line);
+  padding: 20px 24px;
+}
+.offcanvas-title {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: var(--tracking-section);
+}
+.offcanvas-body {
+  padding: 24px;
+}
+.offcanvas-body .field-foot {
+  margin-top: 20px;
+}
+
+.clone-success-actions:not([hidden]) {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .clone-success-actions:not([hidden]) {
+    animation: view-in 220ms var(--ease);
+  }
+}
+
+/* One-shot highlight on a freshly-added (or freshly-cloned) voice row, so it
+   doesn't just blend into the generic staggered list entrance every row
+   already gets on re-render. */
+.voice-row.highlight-new,
+.voice-card.highlight-new {
+  animation: voice-highlight 1400ms var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-row.highlight-new,
+  .voice-card.highlight-new {
+    animation: none;
+  }
+}
+@keyframes voice-highlight {
+  0% { box-shadow: 0 0 0 3px var(--accent); }
+  70% { box-shadow: 0 0 0 3px var(--accent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* ---- Like / favourite buttons ---------------------------------------------- */
+
+/* Voice like button — same icon-btn family as preview/delete, heart icon */
+.voice-like-btn {
+  color: var(--ink-4);
+  transition: color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+.voice-like-btn:hover {
+  color: #e05577;
+  border-color: #e05577;
+}
+.voice-like-btn.liked {
+  color: #e05577;
+  border-color: #e05577;
+  animation: like-pop 360ms var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-like-btn.liked { animation: none; }
+}
+@keyframes like-pop {
+  0%   { transform: scale(1); }
+  30%  { transform: scale(1.25); }
+  60%  { transform: scale(0.92); }
+  100% { transform: scale(1); }
+}
+
+/* "♥ Liked" filter pill — rose/red accent distinguishes it from the green
+   Custom pill and neutral language pills. */
+.pill-liked {
+  border-color: #e05577;
+}
+.pill-liked:hover {
+  border-color: #e05577;
+  color: #e05577;
+}
+.pill-liked.active {
+  background: #e05577;
+  border-color: #e05577;
+  color: #fff;
+}
+.pill-liked.active .count {
+  color: #fff;
+  opacity: 0.7;
+}
+
+/* History item like button */
+.history-item-like {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--ink-4);
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.history-item-like:hover {
+  color: #e05577;
+}
+.history-item-like.liked {
+  color: #e05577;
+  animation: like-pop 360ms var(--ease);
+}
+
+/* History filter bar — sits above the horizontal scroll strip */
+.history-filter-bar {
+  display: flex;
+  gap: 8px;
+  padding: 0 2px;
+}
+.history-filter-bar:not(:empty) {
+  margin-top: 16px;
+  margin-bottom: 4px;
+}
 .topbar-right {
   display: flex;
   align-items: center;
