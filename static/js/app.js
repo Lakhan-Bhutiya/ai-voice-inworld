@@ -711,6 +711,18 @@ api
   .catch((e) => showToast(`Couldn't load voices: ${e.message}`));
 
 // ---- Voice cloning --------------------------------------------------------------
+// A read-aloud sample paragraph, for anyone unsure what to say into the mic.
+// "Use as transcription" copies its exact wording into the transcription field —
+// Inworld's docs note cloning quality improves when it matches the audio verbatim.
+
+const cloneUseScriptBtn = document.getElementById("cloneUseScriptBtn");
+const cloneScriptText = document.getElementById("cloneScriptText");
+cloneUseScriptBtn?.addEventListener("click", () => {
+  const transcriptInput = document.getElementById("cloneTranscript");
+  if (transcriptInput && cloneScriptText) {
+    transcriptInput.value = cloneScriptText.textContent.trim().replace(/\s+/g, " ");
+  }
+});
 
 initClone({
   recordBtn: document.getElementById("recordBtn"),

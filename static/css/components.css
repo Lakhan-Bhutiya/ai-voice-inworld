@@ -1407,6 +1407,33 @@
 .ctrl-range:disabled::-webkit-slider-thumb { cursor: not-allowed; }
 .ctrl-range:disabled::-moz-range-thumb { cursor: not-allowed; }
 
+/* ---- Sample script (read-aloud text for voice clone recordings) --------- */
+
+.clone-script-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  padding: 14px 16px;
+  margin-bottom: 18px;
+}
+.clone-script-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.clone-script-text {
+  font-size: var(--fs-small);
+  line-height: 1.5;
+  color: var(--ink-2);
+  margin: 0 0 12px;
+}
+.clone-script-use {
+  width: 100%;
+  justify-content: center;
+}
+
 /* ---- File drop (voice clone sample upload) ------------------------------ */
 
 .file-drop {
