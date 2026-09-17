@@ -134,7 +134,7 @@ const history = createHistory({
 // cost fields for a regular user, and applyRole below strips the UI that would
 // show them.
 
-const stats = { generations: 0, chars: 0, costUsd: 0, enhances: 0 };
+const stats = { generations: 0, chars: 0, costUsd: 0, enhances: 0, minutesUsed: 0, minutesLimit: null };
 const allTime = { generations: 0, chars: 0, costUsd: 0, enhances: 0 };
 
 const statEls = {
@@ -142,21 +142,42 @@ const statEls = {
   chars: document.getElementById("statChars"),
   cost: document.getElementById("statCost"),
   enhances: document.getElementById("statEnhances"),
+  minutes: document.getElementById("statMinutes"),
   allGenerations: document.getElementById("statAllGenerations"),
   allChars: document.getElementById("statAllChars"),
   allCost: document.getElementById("statAllCost"),
   allEnhances: document.getElementById("statAllEnhances"),
 };
 
+const minutesChip = document.getElementById("minutesChip");
+
+function minutesLabel() {
+  const used = (stats.minutesUsed || 0).toFixed(1);
+  return stats.minutesLimit == null ? `${used} / unlimited` : `${used} / ${stats.minutesLimit}`;
+}
+
 function renderStats() {
   if (statEls.generations) statEls.generations.textContent = String(stats.generations);
   if (statEls.chars) statEls.chars.textContent = stats.chars.toLocaleString();
   if (statEls.cost) statEls.cost.textContent = `$${(stats.costUsd || 0).toFixed(4)}`;
   if (statEls.enhances) statEls.enhances.textContent = String(stats.enhances);
+  if (statEls.minutes) statEls.minutes.textContent = minutesLabel();
   if (statEls.allGenerations) statEls.allGenerations.textContent = String(allTime.generations);
   if (statEls.allChars) statEls.allChars.textContent = allTime.chars.toLocaleString();
   if (statEls.allCost) statEls.allCost.textContent = `$${(allTime.costUsd || 0).toFixed(4)}`;
   if (statEls.allEnhances) statEls.allEnhances.textContent = String(allTime.enhances);
+
+  // Only a limited (non-admin) account gets a running "minutes left" chip.
+  if (minutesChip) {
+    if (stats.minutesLimit == null) {
+      minutesChip.hidden = true;
+    } else {
+      const remaining = Math.max(0, stats.minutesLimit - (stats.minutesUsed || 0));
+      minutesChip.hidden = false;
+      minutesChip.textContent = `${remaining.toFixed(1)} min left`;
+      minutesChip.classList.toggle("low", remaining <= stats.minutesLimit * 0.1 || remaining <= 1);
+    }
+  }
 }
 renderStats();
 
@@ -289,6 +310,8 @@ function userRow(user) {
     return td;
   });
 
+  const minutes = minutesCell(user);
+
   const last = document.createElement("td");
   last.className = "micro";
   last.textContent = formatWhen(u.lastUsedAt);
@@ -335,8 +358,63 @@ function userRow(user) {
     actions.appendChild(note);
   }
 
-  tr.append(who, ...cells, last, actions);
+  tr.append(who, ...cells, minutes, last, actions);
   return tr;
+}
+
+function minutesCell(user) {
+  const td = document.createElement("td");
+  td.className = "num mono";
+  const used = (user.usage.minutesUsed || 0).toFixed(1);
+
+  // The admin (from .env, no `id`) is always unlimited — not editable here.
+  if (!user.id) {
+    td.textContent = `${used} / ∞`;
+    return td;
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "minutes-edit";
+
+  const usedSpan = document.createElement("span");
+  usedSpan.textContent = `${used} /`;
+
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.step = "1";
+  input.placeholder = "∞";
+  input.className = "minutes-input";
+  input.title = "Minute limit — blank means unlimited";
+  if (user.minutesLimit != null) input.value = user.minutesLimit;
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "icon-action";
+  saveBtn.title = "Save minute limit";
+  saveBtn.setAttribute("aria-label", "Save minute limit");
+  saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>';
+  saveBtn.addEventListener("click", async () => {
+    const raw = input.value.trim();
+    const minutesLimit = raw === "" ? null : Number(raw);
+    if (minutesLimit != null && (Number.isNaN(minutesLimit) || minutesLimit < 0)) {
+      showToast("Enter a non-negative number of minutes, or leave blank for unlimited.");
+      return;
+    }
+    try {
+      await api.setUserMinutes(user.id, minutesLimit);
+      showToast(
+        `${user.username}: minute limit ${minutesLimit == null ? "cleared (unlimited)" : `set to ${minutesLimit}`}.`
+      );
+      await loadUsers();
+    } catch (e) {
+      showToast(e.message);
+    }
+  });
+
+  wrap.append(usedSpan, input, saveBtn);
+  td.appendChild(wrap);
+  return td;
 }
 
 function userAction(label, icon, handler) {

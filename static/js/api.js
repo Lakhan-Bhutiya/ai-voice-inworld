@@ -147,6 +147,15 @@ export function setUserDisabled(userId, disabled) {
   });
 }
 
+// Assign (or, with null/blank, clear) an account's TTS minute budget.
+export function setUserMinutes(userId, minutesLimit) {
+  return request(`/api/admin/users/${encodeURIComponent(userId)}/minutes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ minutesLimit }),
+  });
+}
+
 export function deleteUser(userId) {
   return request(`/api/admin/users/${encodeURIComponent(userId)}`, { method: "DELETE" });
 }

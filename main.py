@@ -7,6 +7,7 @@ gpt-4o-mini optionally inserts emotion/non-verbal tags into the text.
 """
 
 import base64
+import io
 import os
 import secrets
 from pathlib import Path
@@ -19,6 +20,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from mutagen import File as MutagenFile
 from pydantic import BaseModel, Field
 
 load_dotenv()  # before importing auth, which reads the credentials at import time
@@ -91,6 +93,47 @@ def _tts_cost(model_id: str | None, chars: int | None) -> float:
     return (chars or 0) / 1_000_000 * rate
 
 
+# ~150 wpm / ~5 chars per word ≈ 12-14 spoken characters per second. Only used
+# as a fallback if the audio itself can't be parsed for its real length.
+FALLBACK_CHARS_PER_SECOND = 14.0
+
+
+def _audio_duration_seconds(audio_bytes: bytes, chars_billed: int | None) -> float:
+    """The clip's real length in seconds, decoded straight out of its own
+    header (mp3/wav/ogg/flac all self-describe this) — falls back to a rough
+    characters-per-second estimate only if that parse fails.
+    """
+    try:
+        info = MutagenFile(io.BytesIO(audio_bytes))
+        if info is not None and info.info is not None and info.info.length:
+            return float(info.info.length)
+    except Exception:
+        pass
+    return (chars_billed or 0) / FALLBACK_CHARS_PER_SECOND
+
+
+async def _check_minutes_quota(session: dict) -> None:
+    """Hard-blocks synthesis once a (non-admin) user has used up their
+    admin-assigned minute budget. Checked before the billed Inworld call, so
+    an exhausted account doesn't rack up further cost.
+    """
+    if auth.is_admin(session):
+        return
+    user = await db.get_user(session["ownerId"])
+    limit = user["minutesLimit"] if user else None
+    if limit is None:
+        return
+    used_minutes = await db.seconds_used(session["ownerId"]) / 60
+    if used_minutes >= limit:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"Out of minutes ({used_minutes:.2f} / {limit:g} used). "
+                "Ask your admin to add more."
+            ),
+        )
+
+
 def _visible_totals(totals: dict, session: dict) -> dict:
     """Usage totals as this session may see them.
 
@@ -108,6 +151,14 @@ def _visible_totals(totals: dict, session: dict) -> dict:
             {k: v for k, v in row.items() if k != "costUsd"} for row in totals["byModel"]
         ],
     }
+
+
+async def _totals_with_quota(session: dict) -> dict:
+    """Usage totals plus this account's minute budget (None = unlimited/admin)."""
+    totals = _visible_totals(await db.usage_summary(session["ownerId"]), session)
+    user = await db.get_user(session["ownerId"])
+    totals["you"]["minutesLimit"] = user["minutesLimit"] if user else None
+    return totals
 
 
 @app.on_event("startup")
@@ -342,6 +393,8 @@ async def voice_preview(voiceId: str, modelId: str = "inworld-tts-1.5-max"):
 @app.post("/api/synthesize")
 async def synthesize(req: SynthesizeRequest, session: dict = Depends(current_session)):
     """Call Inworld TTS and return base64 audio plus a data URL for the player."""
+    await _check_minutes_quota(session)
+
     text = req.text
     if req.description:
         # Inworld supports natural-language steering; prepend it as guidance.
@@ -397,13 +450,15 @@ async def synthesize(req: SynthesizeRequest, session: dict = Depends(current_ses
     usage = data.get("usage") or {}
     chars_billed = usage.get("processedCharactersCount")
     owner = session["ownerId"]
+    audio_bytes = base64.b64decode(audio_b64)
+    duration_seconds = _audio_duration_seconds(audio_bytes, chars_billed)
 
     # Persist to this account's history so it survives reloads and restarts.
     ext = {"MP3": "mp3", "OGG_OPUS": "ogg", "FLAC": "flac"}.get(req.audioEncoding, "wav")
     record = await db.add_render(
         user_id=owner,
         text=req.text,
-        audio_bytes=base64.b64decode(audio_b64),
+        audio_bytes=audio_bytes,
         voice_id=req.voiceId,
         voice_name=req.voiceName,
         model_id=req.modelId,
@@ -421,9 +476,10 @@ async def synthesize(req: SynthesizeRequest, session: dict = Depends(current_ses
         model_id=req.modelId,
         chars=chars_billed or 0,
         cost_usd=_tts_cost(req.modelId, chars_billed),
+        duration_seconds=duration_seconds,
         render_id=record["renderId"],
     )
-    result["usageTotals"] = _visible_totals(await db.usage_summary(owner), session)
+    result["usageTotals"] = await _totals_with_quota(session)
 
     return result
 
@@ -466,9 +522,7 @@ async def enhance(req: EnhanceRequest, session: dict = Depends(current_session))
     )
     return {
         "enhanced": enhanced,
-        "usageTotals": _visible_totals(
-            await db.usage_summary(session["ownerId"]), session
-        ),
+        "usageTotals": await _totals_with_quota(session),
     }
 
 
@@ -493,11 +547,11 @@ async def get_history(limit: int = 50, session: dict = Depends(current_session))
 
 @app.get("/api/usage")
 async def get_usage(session: dict = Depends(current_session)):
-    """Persisted usage: your totals, per-model, and (admin only) everyone's.
-
-    Cost figures are included only for admins — see _visible_totals.
+    """Persisted usage: your totals, per-model, minute budget, and (admin
+    only) everyone's. Cost figures are included only for admins — see
+    _visible_totals.
     """
-    return _visible_totals(await db.usage_summary(session["ownerId"]), session)
+    return await _totals_with_quota(session)
 
 
 @app.get("/api/audio/{render_id}")
@@ -593,12 +647,12 @@ async def clone_voice(
 
 
 @app.get("/api/voices/custom")
-async def list_custom():
-    return {"voices": await db.list_custom_voices()}
+async def list_custom(session: dict = Depends(current_session)):
+    return {"voices": await db.list_custom_voices(session["ownerId"])}
 
 
 @app.delete("/api/voices/custom/{voice_id}")
-async def delete_custom(voice_id: str):
+async def delete_custom(voice_id: str, session: dict = Depends(current_session)):
     """Delete a cloned voice for real — at Inworld, not just our local row.
 
     The old version only ran `DELETE FROM custom_voices`: the voice stayed
@@ -614,7 +668,7 @@ async def delete_custom(voice_id: str):
         )
     if resp.status_code == 404:
         # Not at Inworld at all — clean up a possible orphan local row.
-        if not await db.delete_custom_voice(voice_id):
+        if not await db.delete_custom_voice(voice_id, session["ownerId"]):
             raise HTTPException(status_code=404, detail="Voice not found")
         return {"deleted": voice_id}
     if resp.status_code != 200:
@@ -634,7 +688,7 @@ async def delete_custom(voice_id: str):
     if del_resp.status_code != 200:
         raise HTTPException(status_code=del_resp.status_code, detail=del_resp.text)
 
-    await db.delete_custom_voice(voice_id)  # best-effort; may not have a local row
+    await db.delete_custom_voice(voice_id, session["ownerId"])  # best-effort; may not have a local row
     _invalidate_catalog_cache()
     return {"deleted": voice_id}
 
@@ -656,6 +710,11 @@ class SetPasswordRequest(BaseModel):
 
 class SetDisabledRequest(BaseModel):
     disabled: bool
+
+
+class SetMinutesRequest(BaseModel):
+    # None/omitted = unlimited.
+    minutesLimit: float | None = Field(None, ge=0, le=100_000)
 
 
 def _generated_password() -> str:
@@ -680,7 +739,10 @@ async def admin_list_users(_: dict = Depends(require_admin)):
     """Every account with what it has used and spent."""
     users = await db.list_users()
     usage = {row["userId"]: row for row in await db.usage_by_user()}
-    empty = {"generations": 0, "chars": 0, "costUsd": 0.0, "enhances": 0, "lastUsedAt": None}
+    empty = {
+        "generations": 0, "chars": 0, "costUsd": 0.0, "enhances": 0,
+        "minutesUsed": 0.0, "lastUsedAt": None,
+    }
     return {
         "users": [
             {**u, "usage": {k: v for k, v in usage.get(u["id"], empty).items()
@@ -743,6 +805,17 @@ async def admin_set_disabled(
     if not await db.set_disabled(user_id, req.disabled):
         raise HTTPException(status_code=404, detail="No such user.")
     return {"userId": user_id, "disabled": req.disabled}
+
+
+@app.post("/api/admin/users/{user_id}/minutes")
+async def admin_set_minutes(
+    user_id: str, req: SetMinutesRequest, _: dict = Depends(require_admin)
+):
+    """Set (or, with a blank/null body, clear) this account's TTS minute budget.
+    Synthesis is hard-blocked once minutesUsed reaches this limit."""
+    if not await db.set_minutes_limit(user_id, req.minutesLimit):
+        raise HTTPException(status_code=404, detail="No such user.")
+    return {"userId": user_id, "minutesLimit": req.minutesLimit}
 
 
 @app.delete("/api/admin/users/{user_id}")

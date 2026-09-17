@@ -55,6 +55,7 @@
               <span class="status-dot" id="statusDot"></span>
               <span id="statusText">Checking…</span>
             </div>
+            <span class="micro mono" id="minutesChip" hidden></span>
             <span class="micro mono" id="whoami" hidden></span>
             <button type="button" class="btn-outline" id="logoutBtn" hidden>
               <i class="fa-solid fa-arrow-right-from-bracket" aria-hidden="true"></i> Sign out
@@ -299,6 +300,10 @@
               <span class="micro">You · enhance calls</span>
               <div class="stat-tile-value mono" id="statEnhances">0</div>
             </div>
+            <div class="stat-tile">
+              <span class="micro">You · minutes</span>
+              <div class="stat-tile-value mono" id="statMinutes">0</div>
+            </div>
           </div>
 
           <div class="stat-row" data-admin-only>
@@ -425,6 +430,7 @@
                     <th class="num">Characters</th>
                     <th class="num">Est. cost</th>
                     <th class="num">Enhance</th>
+                    <th class="num">Minutes</th>
                     <th>Last used</th>
                     <th></th>
                   </tr>

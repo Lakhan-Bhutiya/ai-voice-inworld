@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     display_name  TEXT,
     disabled      INTEGER NOT NULL DEFAULT 0,
+    minutes_limit REAL,             -- NULL = unlimited; admin-assigned TTS budget
     created_at    REAL NOT NULL,
     last_login_at REAL
 );
@@ -72,14 +73,15 @@ CREATE TABLE IF NOT EXISTS custom_voices (
 );
 
 CREATE TABLE IF NOT EXISTS usage_events (
-    id            TEXT PRIMARY KEY,
-    session_id    TEXT,
-    kind          TEXT NOT NULL,          -- 'tts' | 'enhance'
-    model_id      TEXT,
-    chars         INTEGER NOT NULL DEFAULT 0,
-    cost_usd      REAL NOT NULL DEFAULT 0,
-    render_id     TEXT,
-    created_at    REAL NOT NULL
+    id               TEXT PRIMARY KEY,
+    session_id       TEXT,
+    kind             TEXT NOT NULL,          -- 'tts' | 'enhance'
+    model_id         TEXT,
+    chars            INTEGER NOT NULL DEFAULT 0,
+    cost_usd         REAL NOT NULL DEFAULT 0,
+    duration_seconds REAL NOT NULL DEFAULT 0, -- real audio length, 'tts' rows only
+    render_id        TEXT,
+    created_at       REAL NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS app_state (
@@ -120,6 +122,17 @@ async def init() -> None:
             columns = {row[1] for row in await cur.fetchall()}
             if "user_id" not in columns:
                 await db.execute(f"ALTER TABLE {table} ADD COLUMN user_id TEXT")
+
+        cur = await db.execute("PRAGMA table_info(users)")
+        if "minutes_limit" not in {row[1] for row in await cur.fetchall()}:
+            await db.execute("ALTER TABLE users ADD COLUMN minutes_limit REAL")
+
+        cur = await db.execute("PRAGMA table_info(usage_events)")
+        if "duration_seconds" not in {row[1] for row in await cur.fetchall()}:
+            await db.execute(
+                "ALTER TABLE usage_events ADD COLUMN duration_seconds REAL NOT NULL DEFAULT 0"
+            )
+
         await db.executescript(_INDEXES)
         await db.commit()
 
@@ -155,6 +168,7 @@ def _user_row(r) -> dict:
         "username": r["username"],
         "displayName": r["display_name"],
         "disabled": bool(r["disabled"]),
+        "minutesLimit": r["minutes_limit"],  # None = unlimited
         "createdAt": r["created_at"],
         "lastLoginAt": r["last_login_at"],
     }
@@ -220,6 +234,16 @@ async def set_disabled(user_id: str, disabled: bool) -> bool:
     async with aiosqlite.connect(DB_PATH) as db:
         cur = await db.execute(
             "UPDATE users SET disabled = ? WHERE id = ?", (1 if disabled else 0, user_id)
+        )
+        await db.commit()
+        return cur.rowcount > 0
+
+
+async def set_minutes_limit(user_id: str, minutes: float | None) -> bool:
+    """Set (or clear, with None) the admin-assigned TTS minute budget."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE users SET minutes_limit = ? WHERE id = ?", (minutes, user_id)
         )
         await db.commit()
         return cur.rowcount > 0
@@ -389,27 +413,41 @@ async def delete_custom_voice(voice_id: str, user_id: str) -> bool:
 # ---- usage / costs -----------------------------------------------------------
 
 async def log_usage(
-    *, user_id, kind, model_id=None, chars=0, cost_usd=0.0, render_id=None
+    *, user_id, kind, model_id=None, chars=0, cost_usd=0.0, duration_seconds=0.0,
+    render_id=None,
 ) -> None:
     """Record one billable call so the Usage view survives reloads/restarts."""
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             """INSERT INTO usage_events
                (id, session_id, user_id, kind, model_id, chars, cost_usd,
-                render_id, created_at)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                duration_seconds, render_id, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (uuid.uuid4().hex, user_id, user_id, kind, model_id, chars or 0,
-             cost_usd or 0.0, render_id, time.time()),
+             cost_usd or 0.0, duration_seconds or 0.0, render_id, time.time()),
         )
         await db.commit()
 
 
+async def seconds_used(user_id: str) -> float:
+    """Total TTS audio duration this user has generated, in seconds."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT COALESCE(SUM(duration_seconds), 0) FROM usage_events "
+            "WHERE user_id = ? AND kind = 'tts'",
+            (user_id,),
+        )
+        row = await cur.fetchone()
+    return row[0] if row else 0.0
+
+
 _TOTALS_SQL = """
 SELECT
-    COALESCE(SUM(kind = 'tts'), 0)                           AS generations,
-    COALESCE(SUM(CASE WHEN kind = 'tts' THEN chars END), 0)  AS chars,
-    COALESCE(SUM(cost_usd), 0.0)                             AS cost_usd,
-    COALESCE(SUM(kind = 'enhance'), 0)                       AS enhances
+    COALESCE(SUM(kind = 'tts'), 0)                                     AS generations,
+    COALESCE(SUM(CASE WHEN kind = 'tts' THEN chars END), 0)            AS chars,
+    COALESCE(SUM(cost_usd), 0.0)                                       AS cost_usd,
+    COALESCE(SUM(kind = 'enhance'), 0)                                 AS enhances,
+    COALESCE(SUM(CASE WHEN kind = 'tts' THEN duration_seconds END), 0) AS seconds
 FROM usage_events
 """
 
@@ -420,6 +458,7 @@ def _totals(row) -> dict:
         "chars": row["chars"],
         "costUsd": round(row["cost_usd"], 6),
         "enhances": row["enhances"],
+        "minutesUsed": round(row["seconds"] / 60, 2),
     }
 
 
@@ -467,11 +506,12 @@ async def usage_by_user() -> list[dict]:
         db.row_factory = aiosqlite.Row
         cur = await db.execute(
             """SELECT user_id,
-                      COALESCE(SUM(kind = 'tts'), 0)                          AS generations,
-                      COALESCE(SUM(CASE WHEN kind = 'tts' THEN chars END), 0) AS chars,
-                      COALESCE(SUM(cost_usd), 0.0)                            AS cost_usd,
-                      COALESCE(SUM(kind = 'enhance'), 0)                      AS enhances,
-                      MAX(created_at)                                         AS last_used_at
+                      COALESCE(SUM(kind = 'tts'), 0)                                     AS generations,
+                      COALESCE(SUM(CASE WHEN kind = 'tts' THEN chars END), 0)            AS chars,
+                      COALESCE(SUM(cost_usd), 0.0)                                       AS cost_usd,
+                      COALESCE(SUM(kind = 'enhance'), 0)                                 AS enhances,
+                      COALESCE(SUM(CASE WHEN kind = 'tts' THEN duration_seconds END), 0) AS seconds,
+                      MAX(created_at)                                                    AS last_used_at
                FROM usage_events WHERE user_id IS NOT NULL
                GROUP BY user_id ORDER BY cost_usd DESC"""
         )

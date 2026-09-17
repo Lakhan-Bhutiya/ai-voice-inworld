@@ -51,13 +51,22 @@ Wrong credentials → `401 { "detail": "Wrong username or password." }`.
 | `/api/admin/users` | POST | `{ username, password?, displayName? }` — blank password generates one |
 | `/api/admin/users/{id}/password` | POST | `{ password? }` → `{ password }` (the only time it's readable) |
 | `/api/admin/users/{id}/disabled` | POST | `{ disabled: true \| false }` |
+| `/api/admin/users/{id}/minutes` | POST | `{ minutesLimit: number \| null }` — set (or clear, with `null`) the account's TTS minute budget |
 | `/api/admin/users/{id}` | DELETE | Deletes the account, its renders, audio, voices and usage |
 
 Create returns the account plus its cleartext password exactly once:
 ```json
 { "id": "…", "username": "riya", "displayName": "Riya S", "disabled": false,
-  "createdAt": 1788173933.3, "lastLoginAt": null, "password": "5F2d6fEmZQ8m4p" }
+  "minutesLimit": null, "createdAt": 1788173933.3, "lastLoginAt": null,
+  "password": "5F2d6fEmZQ8m4p" }
 ```
+
+`minutesLimit` is `null` for unlimited. Each account's real usage is tracked as
+`minutesUsed` (from the actual generated audio length, not an estimate) in its
+`usage` object and in `GET /api/usage`'s `you.minutesUsed`. Once
+`minutesUsed >= minutesLimit`, `POST /api/synthesize` is hard-blocked with
+`402 { "detail": "Out of minutes …" }` before the (billed) Inworld call is made.
+The admin account itself is always unlimited.
 
 ### `GET /api/voices`
 Proxies Inworld's catalog. Shape (fields may vary):

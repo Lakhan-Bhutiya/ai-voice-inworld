@@ -135,6 +135,10 @@
   color: var(--ink-2);
 }
 
+#minutesChip.low {
+  color: var(--danger);
+}
+
 .hero {
   margin-bottom: 32px;
   display: flex;
@@ -1904,4 +1908,31 @@
 .icon-action.danger {
   color: var(--danger);
   border-color: var(--danger);
+}
+
+.minutes-edit {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.minutes-input {
+  width: 56px;
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-mono, monospace);
+  font-size: var(--fs-small);
+  text-align: right;
+}
+.minutes-input:focus {
+  outline: none;
+  border-color: var(--ink-3);
+}
+.minutes-edit .icon-action {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 auto;
 }

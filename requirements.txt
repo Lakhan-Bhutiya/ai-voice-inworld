@@ -4,3 +4,4 @@ httpx==0.28.1
 python-dotenv==1.0.1
 aiosqlite==0.20.0
 python-multipart==0.0.20
+mutagen==1.48.1

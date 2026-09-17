@@ -93,7 +93,13 @@ origins in `ALLOWED_ORIGINS` (comma-separated). See **[FRONTEND.md](FRONTEND.md)
 | `/api/admin/users` | GET · POST | List accounts with their usage · create one |
 | `/api/admin/users/{id}/password` | POST | Reset a password (returns the new one, once) |
 | `/api/admin/users/{id}/disabled` | POST | Suspend or restore |
+| `/api/admin/users/{id}/minutes` | POST | Assign (or clear) the account's TTS minute budget |
 | `/api/admin/users/{id}` | DELETE | Delete the account and everything it owns |
+
+Each account can be given a minute budget (`minutesLimit`, admin-assigned; blank
+= unlimited). Usage is tracked from the real length of generated audio
+(`minutesUsed`), and `/api/synthesize` hard-blocks with `402` once a user hits
+their limit — the admin sees and edits every account's budget on the Users page.
 
 Inworld endpoints: `POST /tts/v1/voice`, `GET /tts/v1/voices`, auth `Authorization: Basic <API_KEY>`.
 
