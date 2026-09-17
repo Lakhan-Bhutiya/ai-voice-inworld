@@ -1427,11 +1427,7 @@
   font-size: var(--fs-small);
   line-height: 1.5;
   color: var(--ink-2);
-  margin: 0 0 12px;
-}
-.clone-script-use {
-  width: 100%;
-  justify-content: center;
+  margin: 0;
 }
 
 /* ---- File drop (voice clone sample upload) ------------------------------ */
