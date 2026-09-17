@@ -136,11 +136,11 @@ export function initComposer({
     enhanceBtn.disabled = true;
     enhanceBtn.textContent = "Enhancing…";
     try {
-      const { enhanced } = await api.enhance({ text: scriptEl.value });
+      const { enhanced, usageTotals } = await api.enhance({ text: scriptEl.value });
       scriptEl.value = enhanced;
       updateCount();
       updateEstimate();
-      onEnhanceUsed?.();
+      onEnhanceUsed?.(usageTotals);
     } catch (e) {
       onError?.(e.message);
     } finally {
@@ -223,7 +223,8 @@ export function initComposer({
           ? `${res.usage.processedCharactersCount} chars billed`
           : "";
       }
-      if (res.usage) onUsage?.({ ...res.usage, modelId: res.usage.modelId || modelId });
+      // usageTotals are the server's persisted running totals for this session.
+      onUsage?.(res.usageTotals);
       if (downloadLink) {
         downloadLink.href = res.dataUrl;
         downloadLink.download = `${voice.displayName || "speech"}.mp3`;

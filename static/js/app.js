@@ -42,9 +42,22 @@ function showToast(message) {
 const statusDot = document.getElementById("statusDot");
 const statusText = document.getElementById("statusText");
 
+const logoutBtn = document.getElementById("logoutBtn");
+logoutBtn?.addEventListener("click", async () => {
+  logoutBtn.disabled = true;
+  try {
+    await api.logout();
+  } catch {
+    /* clearing the cookie failed; the sign-in page will say so */
+  }
+  window.location.replace("/login");
+});
+
 api
   .getHealth()
   .then((data) => {
+    // Only offer sign-out when the backend actually has a login configured.
+    if (logoutBtn) logoutBtn.hidden = !data.authRequired;
     if (!statusDot || !statusText) return;
     if (data.ttsConfigured) {
       statusDot.className = "status-dot ok";
@@ -114,47 +127,372 @@ const history = createHistory({
   },
 });
 
-// ---- Costs / session stats -----------------------------------------------------
-// Derived live from the server's render + enhance-call records, not an
-// in-memory counter — so the Costs view stays correct across reloads and
-// after cloning a voice (which no longer force-reloads the page at all).
+// ---- Usage / costs --------------------------------------------------------------
+// Read from the server's usage ledger, not an in-memory counter — so the view
+// stays correct across reloads and after cloning a voice (which no longer
+// force-reloads the page at all). Money is admin-only: the backend omits the
+// cost fields for a regular user, and applyRole below strips the UI that would
+// show them.
 
-const stats = { generations: 0, chars: 0, costUsd: 0, enhances: 0 };
-const statGenerations = document.getElementById("statGenerations");
-const statChars = document.getElementById("statChars");
-const statCost = document.getElementById("statCost");
-const statEnhances = document.getElementById("statEnhances");
+const stats = { generations: 0, chars: 0, costUsd: 0, enhances: 0, minutesUsed: 0, minutesLimit: null };
+const allTime = { generations: 0, chars: 0, costUsd: 0, enhances: 0 };
+
+const statEls = {
+  generations: document.getElementById("statGenerations"),
+  chars: document.getElementById("statChars"),
+  cost: document.getElementById("statCost"),
+  enhances: document.getElementById("statEnhances"),
+  minutes: document.getElementById("statMinutes"),
+  allGenerations: document.getElementById("statAllGenerations"),
+  allChars: document.getElementById("statAllChars"),
+  allCost: document.getElementById("statAllCost"),
+  allEnhances: document.getElementById("statAllEnhances"),
+};
+
+const minutesChip = document.getElementById("minutesChip");
+
+function minutesLabel() {
+  const used = (stats.minutesUsed || 0).toFixed(1);
+  return stats.minutesLimit == null ? `${used} / unlimited` : `${used} / ${stats.minutesLimit}`;
+}
 
 function renderStats() {
-  if (statGenerations) statGenerations.textContent = String(stats.generations);
-  if (statChars) statChars.textContent = stats.chars.toLocaleString();
-  if (statCost) statCost.textContent = `$${stats.costUsd.toFixed(4)}`;
-  if (statEnhances) statEnhances.textContent = String(stats.enhances);
+  if (statEls.generations) statEls.generations.textContent = String(stats.generations);
+  if (statEls.chars) statEls.chars.textContent = stats.chars.toLocaleString();
+  if (statEls.cost) statEls.cost.textContent = `$${(stats.costUsd || 0).toFixed(4)}`;
+  if (statEls.enhances) statEls.enhances.textContent = String(stats.enhances);
+  if (statEls.minutes) statEls.minutes.textContent = minutesLabel();
+  if (statEls.allGenerations) statEls.allGenerations.textContent = String(allTime.generations);
+  if (statEls.allChars) statEls.allChars.textContent = allTime.chars.toLocaleString();
+  if (statEls.allCost) statEls.allCost.textContent = `$${(allTime.costUsd || 0).toFixed(4)}`;
+  if (statEls.allEnhances) statEls.allEnhances.textContent = String(allTime.enhances);
+
+  // Only a limited (non-admin) account gets a running "minutes left" chip.
+  if (minutesChip) {
+    if (stats.minutesLimit == null) {
+      minutesChip.hidden = true;
+    } else {
+      const remaining = Math.max(0, stats.minutesLimit - (stats.minutesUsed || 0));
+      minutesChip.hidden = false;
+      minutesChip.textContent = `${remaining.toFixed(1)} min left`;
+      minutesChip.classList.toggle("low", remaining <= stats.minutesLimit * 0.1 || remaining <= 1);
+    }
+  }
 }
 renderStats();
 
-function applyHistoryStats(rows, enhanceCount) {
-  stats.generations = rows.length;
-  stats.chars = rows.reduce((sum, r) => sum + (r.charsBilled || 0), 0);
-  stats.costUsd = rows.reduce((sum, r) => sum + costFor(r.charsBilled || 0, r.modelId), 0);
-  stats.enhances = enhanceCount || 0;
+// Totals come from the backend, which logs every billable call to SQLite — so
+// they're the same numbers after a reload, a restart, or a new browser tab, and
+// deleting a render doesn't erase what it already cost. The cost fields are
+// omitted server-side unless you're signed in as an admin.
+function applyTotals(totals) {
+  if (!totals) return;
+  Object.assign(stats, totals.you);
+  // allUsers is admin-only, so a user's payload simply doesn't carry it.
+  if (totals.allUsers) Object.assign(allTime, totals.allUsers);
   renderStats();
 }
 
-async function refreshStats() {
+async function refreshStats(totals) {
+  // Synthesize/enhance hand back the refreshed totals, so only fall back to a
+  // fetch when we weren't given any (a delete, say).
+  if (totals) return applyTotals(totals);
   try {
-    const { history: rows, enhanceCount } = await api.getHistory();
-    applyHistoryStats(rows, enhanceCount);
+    applyTotals(await api.getUsage());
   } catch {
     /* keep last-known stats on a transient failure */
   }
 }
 
-// Restore this session's persisted renders (survive reloads and restarts)
-// and seed the Costs stats from the same fetch.
+refreshStats();
+
+// ---- Role gating ----------------------------------------------------------------
+// Only an admin sees money. Everyone sees what they've used: generations,
+// characters billed, and enhance calls. The backend enforces this on the data;
+// this just takes the corresponding UI out of the page.
+
+let isAdmin = true;
+
+function applyRole(me) {
+  isAdmin = !!me.isAdmin;
+  for (const el of document.querySelectorAll("[data-admin-only]")) {
+    if (!isAdmin) el.remove();
+  }
+  for (const el of document.querySelectorAll("[data-user-only]")) {
+    el.hidden = isAdmin;
+    if (isAdmin) el.remove();
+  }
+  const whoami = document.getElementById("whoami");
+  if (whoami && me.username) {
+    whoami.textContent = `${me.username} · ${me.role}`;
+    whoami.hidden = false;
+  }
+  if (!isAdmin) {
+    // A "Costs" page with no costs on it is just usage.
+    const eyebrow = document.getElementById("costsEyebrow");
+    if (eyebrow) eyebrow.textContent = "03 · Usage";
+    for (const btn of document.querySelectorAll('[data-view="costs"]')) {
+      btn.setAttribute("aria-label", "Usage");
+      if (btn.title) btn.title = "Usage (3)";
+    }
+  }
+}
+
+api
+  .getMe()
+  .then((me) => {
+    applyRole(me);
+    if (me.isAdmin) loadUsers();
+  })
+  .catch(() => {
+    // Can't tell who this is — assume the stricter of the two and hide money.
+    applyRole({ isAdmin: false });
+  });
+
+// ---- Admin: accounts ------------------------------------------------------------
+// The admin creates an account, hands over the password once, and watches what
+// each person generates. Every control here lives inside [data-admin-only]
+// markup, so for a user it was removed from the page before this ever runs —
+// and the endpoints answer 403 regardless.
+
+const createUserForm = document.getElementById("createUserForm");
+const userTableBody = document.getElementById("userTableBody");
+const userCount = document.getElementById("userCount");
+const credentialSlip = document.getElementById("credentialSlip");
+const credentialLine = document.getElementById("credentialLine");
+
+function formatWhen(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  const days = (Date.now() - d) / 86_400_000;
+  if (days < 1) return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+function showCredentials(username, password) {
+  if (!credentialSlip) return;
+  credentialLine.textContent = `${username} / ${password}`;
+  credentialSlip.hidden = false;
+}
+
+function userRow(user) {
+  const tr = document.createElement("tr");
+  if (user.disabled) tr.classList.add("is-disabled");
+
+  const who = document.createElement("td");
+  const name = document.createElement("span");
+  name.className = "user-name";
+  name.textContent = user.username;
+  who.appendChild(name);
+  if (user.displayName) {
+    const sub = document.createElement("span");
+    sub.className = "user-sub";
+    sub.textContent = user.displayName;
+    who.appendChild(sub);
+  }
+  if (user.disabled) {
+    const tag = document.createElement("span");
+    tag.className = "user-tag";
+    tag.textContent = "suspended";
+    who.appendChild(tag);
+  }
+
+  const u = user.usage;
+  const cells = [
+    u.generations.toLocaleString(),
+    u.chars.toLocaleString(),
+    `$${(u.costUsd || 0).toFixed(4)}`,
+    String(u.enhances),
+  ].map((text) => {
+    const td = document.createElement("td");
+    td.className = "num mono";
+    td.textContent = text;
+    return td;
+  });
+
+  const minutes = minutesCell(user);
+
+  const last = document.createElement("td");
+  last.className = "micro";
+  last.textContent = formatWhen(u.lastUsedAt);
+
+  const actions = document.createElement("td");
+  actions.className = "user-actions";
+  if (user.id) {
+    actions.append(
+      userAction("Reset password", "fa-key", async () => {
+        const { password } = await api.resetUserPassword(user.id);
+        showCredentials(user.username, password);
+        showToast(`New password for ${user.username} — shown above.`);
+      }),
+      userAction(user.disabled ? "Restore" : "Suspend",
+        user.disabled ? "fa-circle-play" : "fa-ban", async () => {
+          await api.setUserDisabled(user.id, !user.disabled);
+          showToast(`${user.username} ${user.disabled ? "restored" : "suspended"}.`);
+          await loadUsers();
+        }),
+      userAction("Delete", "fa-trash", async (btn) => {
+        // Two-step rather than a confirm() dialog, which blocks the page.
+        if (btn.dataset.armed !== "1") {
+          btn.dataset.armed = "1";
+          btn.classList.add("danger");
+          btn.title = "Deletes their renders and audio too — click again";
+          btn.querySelector("i").className = "fa-solid fa-triangle-exclamation";
+          setTimeout(() => {
+            btn.dataset.armed = "0";
+            btn.classList.remove("danger");
+            btn.title = "Delete";
+            btn.querySelector("i").className = "fa-solid fa-trash";
+          }, 4000);
+          return;
+        }
+        await api.deleteUser(user.id);
+        showToast(`Deleted ${user.username} and everything they generated.`);
+        await loadUsers();
+      }),
+    );
+  } else {
+    const note = document.createElement("span");
+    note.className = "micro";
+    note.textContent = "from .env";
+    actions.appendChild(note);
+  }
+
+  tr.append(who, ...cells, minutes, last, actions);
+  return tr;
+}
+
+function minutesCell(user) {
+  const td = document.createElement("td");
+  td.className = "num mono";
+  const used = (user.usage.minutesUsed || 0).toFixed(1);
+
+  // The admin (from .env, no `id`) is always unlimited — not editable here.
+  if (!user.id) {
+    td.textContent = `${used} / ∞`;
+    return td;
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "minutes-edit";
+
+  const usedSpan = document.createElement("span");
+  usedSpan.textContent = `${used} /`;
+
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = "0";
+  input.step = "1";
+  input.placeholder = "∞";
+  input.className = "minutes-input";
+  input.title = "Minute limit — blank means unlimited";
+  if (user.minutesLimit != null) input.value = user.minutesLimit;
+
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "icon-action";
+  saveBtn.title = "Save minute limit";
+  saveBtn.setAttribute("aria-label", "Save minute limit");
+  saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>';
+  saveBtn.addEventListener("click", async () => {
+    const raw = input.value.trim();
+    const minutesLimit = raw === "" ? null : Number(raw);
+    if (minutesLimit != null && (Number.isNaN(minutesLimit) || minutesLimit < 0)) {
+      showToast("Enter a non-negative number of minutes, or leave blank for unlimited.");
+      return;
+    }
+    try {
+      await api.setUserMinutes(user.id, minutesLimit);
+      showToast(
+        `${user.username}: minute limit ${minutesLimit == null ? "cleared (unlimited)" : `set to ${minutesLimit}`}.`
+      );
+      await loadUsers();
+    } catch (e) {
+      showToast(e.message);
+    }
+  });
+
+  wrap.append(usedSpan, input, saveBtn);
+  td.appendChild(wrap);
+  return td;
+}
+
+function userAction(label, icon, handler) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "icon-action";
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+  btn.innerHTML = `<i class="fa-solid ${icon}" aria-hidden="true"></i>`;
+  btn.addEventListener("click", async () => {
+    try {
+      await handler(btn);
+    } catch (e) {
+      showToast(e.message);
+    }
+  });
+  return btn;
+}
+
+async function loadUsers() {
+  if (!userTableBody) return;
+  try {
+    const { users, admin } = await api.listUsers();
+    userTableBody.replaceChildren(
+      // The admin sits at the top of its own table, without action buttons:
+      // its credentials live in .env, not in the database.
+      userRow({ username: admin.username, displayName: "admin · from .env", usage: admin.usage }),
+      ...users.map(userRow),
+    );
+    if (userCount) {
+      userCount.textContent = `${users.length} account${users.length === 1 ? "" : "s"}`;
+    }
+  } catch (e) {
+    showToast(`Couldn't load accounts: ${e.message}`);
+  }
+}
+
+createUserForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const username = document.getElementById("newUsername");
+  const displayName = document.getElementById("newDisplayName");
+  const password = document.getElementById("newPassword");
+  const submit = document.getElementById("createUserBtn");
+  if (!username.value.trim()) return;
+
+  submit.disabled = true;
+  try {
+    const user = await api.createUser({
+      username: username.value.trim(),
+      password: password.value,
+      displayName: displayName.value.trim() || null,
+    });
+    showCredentials(user.username, user.password);
+    username.value = "";
+    displayName.value = "";
+    password.value = "";
+    await loadUsers();
+    await refreshStats();
+  } catch (err) {
+    showToast(err.message);
+  } finally {
+    submit.disabled = false;
+  }
+});
+
+document.getElementById("copyCredentials")?.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(credentialLine.textContent);
+    showToast("Credentials copied.");
+  } catch {
+    showToast("Couldn't copy — select the text instead.");
+  }
+});
+
+// Restore this account's persisted renders (survive reloads and restarts).
 api
   .getHistory()
-  .then(({ history: rows, enhanceCount, likedRenderIds }) => {
+  .then(({ history: rows, likedRenderIds }) => {
     // Add oldest-first so the newest ends up on top after each unshift.
     for (const r of [...rows].reverse()) {
       history.add({
@@ -168,7 +506,6 @@ api
     if (likedRenderIds?.length) {
       history.setLikedIds(likedRenderIds);
     }
-    applyHistoryStats(rows, enhanceCount);
   })
   .catch(() => {});
 
@@ -367,8 +704,8 @@ api
       history,
       setBusy,
       onError: showToast,
-      onUsage: () => refreshStats(),
-      onEnhanceUsed: () => refreshStats(),
+      onUsage: (totals) => refreshStats(totals),
+      onEnhanceUsed: (totals) => refreshStats(totals),
     });
   })
   .catch((e) => showToast(`Couldn't load voices: ${e.message}`));
@@ -428,8 +765,10 @@ document.addEventListener("keydown", (e) => {
     document.getElementById("scriptText")?.focus();
     return;
   }
-  if (!typingInField && ["1", "2", "3"].includes(e.key)) {
-    const names = ["studio", "voices", "costs"];
-    showView(names[Number(e.key) - 1]);
+  if (!typingInField && ["1", "2", "3", "4"].includes(e.key)) {
+    const names = ["studio", "voices", "costs", "people"];
+    const name = names[Number(e.key) - 1];
+    // "4" is the admin's Users view; for anyone else it isn't in the page.
+    if (document.querySelector(`.view[data-view="${name}"]`)) showView(name);
   }
 });

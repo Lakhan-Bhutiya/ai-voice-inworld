@@ -7,20 +7,26 @@ gpt-4o-mini optionally inserts emotion/non-verbal tags into the text.
 """
 
 import base64
+import io
 import os
+import secrets
 from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, Response, UploadFile
+from fastapi import (
+    Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from mutagen import File as MutagenFile
 from pydantic import BaseModel, Field
 
-import db
+load_dotenv()  # before importing auth, which reads the credentials at import time
 
-load_dotenv()
+import auth  # noqa: E402
+import db  # noqa: E402
 
 API_KEY = os.getenv("API_KEY")  # Inworld Base64 key
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -52,19 +58,216 @@ ENHANCE_SYSTEM_PROMPT = (
 
 app = FastAPI(title="AI Voice POC (Inworld)", version="1.0.0")
 
-# Allow a separately-hosted frontend to call this API from any origin (POC).
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# The UI is served from this same origin; the login cookie means a wildcard
+# origin would be both unsafe and (with credentials) rejected by browsers.
+# Set ALLOWED_ORIGINS="https://a.example,https://b.example" to host it elsewhere.
+_allowed_origins = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()
+]
+if _allowed_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_allowed_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+
+# Published Inworld rates per 1M characters, used to price each render as it
+# happens (the frontend shows the same numbers on the Costs view).
+RATE_PER_MILLION = {
+    "inworld-tts-1.5-max": 10.0,
+    "inworld-tts-1.5-mini": 15.0,
+    "inworld-tts-2": 5.0,
+}
+DEFAULT_RATE = RATE_PER_MILLION["inworld-tts-1.5-max"]
+
+# gpt-4o-mini enhance calls are tiny; price them off characters in + out at the
+# published $0.15/$0.60 per 1M tokens, assuming ~4 characters per token.
+ENHANCE_RATE_PER_CHAR = (0.15 + 0.60) / 1_000_000 / 4
+
+
+def _tts_cost(model_id: str | None, chars: int | None) -> float:
+    rate = RATE_PER_MILLION.get(model_id or "", DEFAULT_RATE)
+    return (chars or 0) / 1_000_000 * rate
+
+
+# ~150 wpm / ~5 chars per word ≈ 12-14 spoken characters per second. Only used
+# as a fallback if the audio itself can't be parsed for its real length.
+FALLBACK_CHARS_PER_SECOND = 14.0
+
+
+def _audio_duration_seconds(audio_bytes: bytes, chars_billed: int | None) -> float:
+    """The clip's real length in seconds, decoded straight out of its own
+    header (mp3/wav/ogg/flac all self-describe this) — falls back to a rough
+    characters-per-second estimate only if that parse fails.
+    """
+    try:
+        info = MutagenFile(io.BytesIO(audio_bytes))
+        if info is not None and info.info is not None and info.info.length:
+            return float(info.info.length)
+    except Exception:
+        pass
+    return (chars_billed or 0) / FALLBACK_CHARS_PER_SECOND
+
+
+async def _check_minutes_quota(session: dict) -> None:
+    """Hard-blocks synthesis once a (non-admin) user has used up their
+    admin-assigned minute budget. Checked before the billed Inworld call, so
+    an exhausted account doesn't rack up further cost.
+    """
+    if auth.is_admin(session):
+        return
+    user = await db.get_user(session["ownerId"])
+    limit = user["minutesLimit"] if user else None
+    if limit is None:
+        return
+    used_minutes = await db.seconds_used(session["ownerId"]) / 60
+    if used_minutes >= limit:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"Out of minutes ({used_minutes:.2f} / {limit:g} used). "
+                "Ask your admin to add more."
+            ),
+        )
+
+
+def _visible_totals(totals: dict, session: dict) -> dict:
+    """Usage totals as this session may see them.
+
+    Everyone gets their own volume numbers (generations, characters, enhance
+    calls); only an admin gets the money, and the all-users total. The keys are
+    dropped server-side rather than merely hidden in the UI, so a regular user
+    can't read spend off the API either.
+    """
+    if auth.is_admin(session):
+        return totals
+    # A user sees their own volume only: no money, and no window onto anyone else.
+    return {
+        "you": {k: v for k, v in totals["you"].items() if k != "costUsd"},
+        "byModel": [
+            {k: v for k, v in row.items() if k != "costUsd"} for row in totals["byModel"]
+        ],
+    }
+
+
+async def _totals_with_quota(session: dict) -> dict:
+    """Usage totals plus this account's minute budget (None = unlimited/admin)."""
+    totals = _visible_totals(await db.usage_summary(session["ownerId"]), session)
+    user = await db.get_user(session["ownerId"])
+    totals["you"]["minutesLimit"] = user["minutesLimit"] if user else None
+    return totals
 
 
 @app.on_event("startup")
 async def _startup():
     await db.init()
+    await auth.init()
+    if auth.enabled():
+        accounts = await db.list_users()
+        print(
+            f"Login enabled. Admin: {auth.ADMIN_USERNAME}. "
+            f"User accounts: {len(accounts)} (the admin creates these in the app).",
+            # Unbuffered: piped to a log file this line would otherwise sit in
+            # the buffer until shutdown, which is exactly when nobody reads it.
+            flush=True,
+        )
+    else:
+        print(
+            "WARNING: no ADMIN_USERNAME/ADMIN_PASSWORD in .env — "
+            "the UI is open to anyone who can reach it, as an admin.",
+            flush=True,
+        )
+
+
+# ---- Login gate --------------------------------------------------------------
+
+# Everything except these needs a valid session cookie. /api/health stays open so
+# the login page can show connection status before you're in.
+PUBLIC_PATHS = {"/login", "/api/login", "/api/health", "/favicon.ico"}
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if (
+        path in PUBLIC_PATHS
+        or path.startswith("/static/")
+        or request.method == "OPTIONS"
+    ):
+        return await call_next(request)
+
+    if await auth.session_for(request.cookies.get(auth.COOKIE_NAME)):
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse({"detail": "Not signed in."}, status_code=401)
+    return RedirectResponse("/login", status_code=303)
+
+
+async def current_session(request: Request) -> dict:
+    """The signed-in account. Past the middleware this is always present."""
+    session = await auth.session_for(request.cookies.get(auth.COOKIE_NAME))
+    if not session:
+        raise HTTPException(status_code=401, detail="Not signed in.")
+    return session
+
+
+async def require_admin(session: dict = Depends(current_session)) -> dict:
+    if not auth.is_admin(session):
+        raise HTTPException(status_code=403, detail="Admins only.")
+    return session
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., max_length=200)
+    password: str = Field(..., max_length=200)
+
+
+@app.get("/login")
+async def login_page(request: Request):
+    """The sign-in screen — skipped entirely if you already have a session."""
+    if await auth.session_for(request.cookies.get(auth.COOKIE_NAME)):
+        return RedirectResponse("/", status_code=303)
+    return FileResponse(BASE_DIR / "static" / "login.html")
+
+
+@app.post("/api/login")
+async def login(req: LoginRequest, response: Response):
+    if not auth.enabled():
+        raise HTTPException(
+            status_code=500,
+            detail="Login is not configured. Add ADMIN_USERNAME and ADMIN_PASSWORD to .env",
+        )
+    session = await auth.authenticate(req.username, req.password)
+    if not session:
+        raise HTTPException(status_code=401, detail="Wrong username or password.")
+    response.set_cookie(
+        auth.COOKIE_NAME,
+        auth.make_token(session),
+        max_age=auth.SESSION_TTL,
+        httponly=True,
+        samesite="lax",
+    )
+    return {"ok": True, "username": session["username"], "role": session["role"]}
+
+
+@app.get("/api/me")
+async def me(session: dict = Depends(current_session)):
+    """Who's signed in and what they may see. Drives the UI's money gating."""
+    return {
+        "username": session["username"],
+        "role": session["role"],
+        "isAdmin": auth.is_admin(session),
+    }
+
+
+@app.post("/api/logout")
+async def logout(response: Response):
+    response.delete_cookie(auth.COOKIE_NAME)
+    return {"ok": True}
 
 
 class SynthesizeRequest(BaseModel):
@@ -80,20 +283,15 @@ class SynthesizeRequest(BaseModel):
     speakingRate: float = Field(1.0, ge=0.5, le=1.5)   # 1.0 = normal speed
     temperature: float | None = Field(None, ge=0.0, le=2.0)  # variation; ignored on tts-2
     deliveryMode: str | None = None  # STABLE | BALANCED | CREATIVE (tts-2 only)
-    # If provided, the render is persisted to this browser session's history.
-    sessionId: str | None = None
 
 
 class EnhanceRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=2000)
-    # If provided, this billed call is counted toward the session's Costs stats.
-    sessionId: str | None = None
 
 
 class LikeRequest(BaseModel):
     itemType: str = Field(..., pattern="^(voice|render)$")
     itemId: str = Field(..., min_length=1)
-    sessionId: str | None = None
 
 
 def _auth_headers() -> dict:
@@ -115,6 +313,7 @@ async def health():
         "engine": "inworld",
         "ttsConfigured": bool(API_KEY),
         "enhanceAvailable": bool(OPENAI_API_KEY),
+        "authRequired": auth.enabled(),
     }
 
 
@@ -150,7 +349,7 @@ def _invalidate_catalog_cache() -> None:
 
 
 @app.get("/api/voices")
-async def list_voices():
+async def list_voices(session: dict = Depends(current_session)):
     """Custom (cloned) voices first, then Inworld's built-in catalog.
 
     Inworld's own catalog can already contain voices cloned earlier (it's
@@ -161,7 +360,7 @@ async def list_voices():
     the catalog) isn't listed twice.
     """
     catalog = await _fetch_catalog()
-    custom = await db.list_custom_voices()
+    custom = await db.list_custom_voices(session["ownerId"])
     custom_ids = {v["voiceId"] for v in custom}
     return {"voices": custom + [v for v in catalog if v.get("voiceId") not in custom_ids]}
 
@@ -192,8 +391,10 @@ async def voice_preview(voiceId: str, modelId: str = "inworld-tts-1.5-max"):
 
 
 @app.post("/api/synthesize")
-async def synthesize(req: SynthesizeRequest):
+async def synthesize(req: SynthesizeRequest, session: dict = Depends(current_session)):
     """Call Inworld TTS and return base64 audio plus a data URL for the player."""
+    await _check_minutes_quota(session)
+
     text = req.text
     if req.description:
         # Inworld supports natural-language steering; prepend it as guidance.
@@ -246,31 +447,45 @@ async def synthesize(req: SynthesizeRequest):
         "usage": data.get("usage"),
     }
 
-    # Persist to this session's history so it survives reloads/restarts.
-    if req.sessionId:
-        ext = {"MP3": "mp3", "OGG_OPUS": "ogg", "FLAC": "flac"}.get(
-            req.audioEncoding, "wav"
-        )
-        usage = data.get("usage") or {}
-        record = await db.add_render(
-            session_id=req.sessionId,
-            text=req.text,
-            audio_bytes=base64.b64decode(audio_b64),
-            voice_id=req.voiceId,
-            voice_name=req.voiceName,
-            model_id=req.modelId,
-            description=req.description,
-            chars_billed=usage.get("processedCharactersCount"),
-            ext=ext,
-        )
-        result["renderId"] = record["renderId"]
-        result["audioUrl"] = record["audioUrl"]
+    usage = data.get("usage") or {}
+    chars_billed = usage.get("processedCharactersCount")
+    owner = session["ownerId"]
+    audio_bytes = base64.b64decode(audio_b64)
+    duration_seconds = _audio_duration_seconds(audio_bytes, chars_billed)
+
+    # Persist to this account's history so it survives reloads and restarts.
+    ext = {"MP3": "mp3", "OGG_OPUS": "ogg", "FLAC": "flac"}.get(req.audioEncoding, "wav")
+    record = await db.add_render(
+        user_id=owner,
+        text=req.text,
+        audio_bytes=audio_bytes,
+        voice_id=req.voiceId,
+        voice_name=req.voiceName,
+        model_id=req.modelId,
+        description=req.description,
+        chars_billed=chars_billed,
+        ext=ext,
+    )
+    result["renderId"] = record["renderId"]
+    result["audioUrl"] = record["audioUrl"]
+
+    # Bill it against whoever asked for it.
+    await db.log_usage(
+        user_id=owner,
+        kind="tts",
+        model_id=req.modelId,
+        chars=chars_billed or 0,
+        cost_usd=_tts_cost(req.modelId, chars_billed),
+        duration_seconds=duration_seconds,
+        render_id=record["renderId"],
+    )
+    result["usageTotals"] = await _totals_with_quota(session)
 
     return result
 
 
 @app.post("/api/enhance")
-async def enhance(req: EnhanceRequest):
+async def enhance(req: EnhanceRequest, session: dict = Depends(current_session)):
     """Use OpenAI gpt-4o-mini to insert emotion/non-verbal tags into the text."""
     if not OPENAI_API_KEY:
         raise HTTPException(
@@ -297,41 +512,63 @@ async def enhance(req: EnhanceRequest):
     if resp.status_code != 200:
         raise HTTPException(status_code=resp.status_code, detail=resp.text)
     enhanced = resp.json()["choices"][0]["message"]["content"].strip()
-    if req.sessionId:
-        await db.add_enhance_call(req.sessionId)
-    return {"enhanced": enhanced}
+
+    await db.log_usage(
+        user_id=session["ownerId"],
+        kind="enhance",
+        model_id="gpt-4o-mini",
+        chars=len(req.text) + len(enhanced),
+        cost_usd=(len(req.text) + len(enhanced)) * ENHANCE_RATE_PER_CHAR,
+    )
+    return {
+        "enhanced": enhanced,
+        "usageTotals": await _totals_with_quota(session),
+    }
 
 
 # ---- Session history ---------------------------------------------------------
 
 
 @app.get("/api/history")
-async def get_history(sessionId: str, limit: int = 50):
-    """Past renders for a browser session (newest first), for restore on reload.
+async def get_history(limit: int = 50, session: dict = Depends(current_session)):
+    """Your past renders (newest first), for restore on reload.
 
-    Also returns enhanceCount so the Costs view's stats can be rebuilt from
-    what was actually billed instead of an in-memory counter that resets on
-    every page load.
+    Also returns enhanceCount so the Usage view's stats can be rebuilt from what
+    was actually billed instead of an in-memory counter that resets on every
+    page load.
     """
+    owner = session["ownerId"]
     return {
-        "history": await db.list_renders(sessionId, limit),
-        "enhanceCount": await db.count_enhance_calls(sessionId),
-        "likedRenderIds": await db.list_likes(sessionId, "render"),
+        "history": await db.list_renders(owner, limit),
+        "enhanceCount": await db.count_enhance_calls(owner),
+        "likedRenderIds": await db.list_likes(owner, "render"),
     }
 
 
+@app.get("/api/usage")
+async def get_usage(session: dict = Depends(current_session)):
+    """Persisted usage: your totals, per-model, minute budget, and (admin
+    only) everyone's. Cost figures are included only for admins — see
+    _visible_totals.
+    """
+    return await _totals_with_quota(session)
+
+
 @app.get("/api/audio/{render_id}")
-async def get_audio(render_id: str):
-    """Serve a stored render's audio so history entries can replay without re-billing."""
-    path = await db.get_audio_path(render_id)
+async def get_audio(render_id: str, session: dict = Depends(current_session)):
+    """Serve a stored render's audio so history entries replay without re-billing.
+
+    Scoped to the owner, so one account can't fetch another's audio by id.
+    """
+    path = await db.get_audio_path(render_id, session["ownerId"])
     if not path or not Path(path).exists():
         raise HTTPException(status_code=404, detail="Audio not found")
     return FileResponse(path)
 
 
 @app.delete("/api/history/{render_id}")
-async def delete_history(render_id: str):
-    if not await db.delete_render(render_id):
+async def delete_history(render_id: str, session: dict = Depends(current_session)):
+    if not await db.delete_render(render_id, session["ownerId"]):
         raise HTTPException(status_code=404, detail="Render not found")
     return {"deleted": render_id}
 
@@ -340,18 +577,16 @@ async def delete_history(render_id: str):
 
 
 @app.post("/api/likes/toggle")
-async def toggle_like(req: LikeRequest):
-    if not req.sessionId:
-        raise HTTPException(status_code=400, detail="sessionId is required")
-    liked = await db.toggle_like(req.sessionId, req.itemType, req.itemId)
+async def toggle_like(req: LikeRequest, session: dict = Depends(current_session)):
+    liked = await db.toggle_like(session["ownerId"], req.itemType, req.itemId)
     return {"liked": liked, "itemType": req.itemType, "itemId": req.itemId}
 
 
 @app.get("/api/likes")
-async def get_likes(sessionId: str, itemType: str):
+async def get_likes(itemType: str, session: dict = Depends(current_session)):
     if itemType not in ("voice", "render"):
         raise HTTPException(status_code=400, detail="itemType must be 'voice' or 'render'")
-    return {"likes": await db.list_likes(sessionId, itemType)}
+    return {"likes": await db.list_likes(session["ownerId"], itemType)}
 
 
 # ---- Custom voice cloning ----------------------------------------------------
@@ -363,7 +598,7 @@ async def clone_voice(
     displayName: str = Form(...),
     languageCode: str = Form("en-US"),
     transcription: str = Form(""),
-    sessionId: str = Form(""),
+    session: dict = Depends(current_session),
 ):
     """Clone a voice from a 5-15s audio sample (wav/mp3, <=4MB) via Inworld."""
     raw = await file.read()
@@ -399,7 +634,7 @@ async def clone_voice(
         voice_id=voice_id,
         display_name=voice.get("displayName") or displayName,
         language_code=voice.get("languageCode") or languageCode,
-        session_id=sessionId or None,
+        user_id=session["ownerId"],
     )
     return {
         "voiceId": voice_id,
@@ -412,12 +647,12 @@ async def clone_voice(
 
 
 @app.get("/api/voices/custom")
-async def list_custom():
-    return {"voices": await db.list_custom_voices()}
+async def list_custom(session: dict = Depends(current_session)):
+    return {"voices": await db.list_custom_voices(session["ownerId"])}
 
 
 @app.delete("/api/voices/custom/{voice_id}")
-async def delete_custom(voice_id: str):
+async def delete_custom(voice_id: str, session: dict = Depends(current_session)):
     """Delete a cloned voice for real — at Inworld, not just our local row.
 
     The old version only ran `DELETE FROM custom_voices`: the voice stayed
@@ -433,7 +668,7 @@ async def delete_custom(voice_id: str):
         )
     if resp.status_code == 404:
         # Not at Inworld at all — clean up a possible orphan local row.
-        if not await db.delete_custom_voice(voice_id):
+        if not await db.delete_custom_voice(voice_id, session["ownerId"]):
             raise HTTPException(status_code=404, detail="Voice not found")
         return {"deleted": voice_id}
     if resp.status_code != 200:
@@ -453,9 +688,143 @@ async def delete_custom(voice_id: str):
     if del_resp.status_code != 200:
         raise HTTPException(status_code=del_resp.status_code, detail=del_resp.text)
 
-    await db.delete_custom_voice(voice_id)  # best-effort; may not have a local row
+    await db.delete_custom_voice(voice_id, session["ownerId"])  # best-effort; may not have a local row
     _invalidate_catalog_cache()
     return {"deleted": voice_id}
+
+
+# ---- Admin: accounts ---------------------------------------------------------
+# Only the admin (whose own credentials live in .env) can reach any of these.
+
+
+class CreateUserRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=32)
+    # Blank asks the server to generate one — the admin hands it to the person.
+    password: str = Field("", max_length=200)
+    displayName: str | None = Field(None, max_length=80)
+
+
+class SetPasswordRequest(BaseModel):
+    password: str = Field("", max_length=200)
+
+
+class SetDisabledRequest(BaseModel):
+    disabled: bool
+
+
+class SetMinutesRequest(BaseModel):
+    # None/omitted = unlimited.
+    minutesLimit: float | None = Field(None, ge=0, le=100_000)
+
+
+def _generated_password() -> str:
+    """Readable but unguessable — the admin has to be able to type it out once."""
+    alphabet = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return "".join(secrets.choice(alphabet) for _ in range(14))
+
+
+def _check_password(password: str) -> str:
+    """Use the given password, or make one. Returns what the account will get."""
+    if not password:
+        return _generated_password()
+    if len(password) < 8:
+        raise HTTPException(
+            status_code=400, detail="Password must be at least 8 characters."
+        )
+    return password
+
+
+@app.get("/api/admin/users")
+async def admin_list_users(_: dict = Depends(require_admin)):
+    """Every account with what it has used and spent."""
+    users = await db.list_users()
+    usage = {row["userId"]: row for row in await db.usage_by_user()}
+    empty = {
+        "generations": 0, "chars": 0, "costUsd": 0.0, "enhances": 0,
+        "minutesUsed": 0.0, "lastUsedAt": None,
+    }
+    return {
+        "users": [
+            {**u, "usage": {k: v for k, v in usage.get(u["id"], empty).items()
+                            if k != "userId"}}
+            for u in users
+        ],
+        "admin": {
+            "username": auth.ADMIN_USERNAME,
+            "usage": {k: v for k, v in usage.get(auth.ADMIN_ID, empty).items()
+                      if k != "userId"},
+        },
+    }
+
+
+@app.post("/api/admin/users", status_code=201)
+async def admin_create_user(
+    req: CreateUserRequest, _: dict = Depends(require_admin)
+):
+    """Create an account. The password is returned once, and only here — it's
+    stored as a salted hash, so nobody (admin included) can read it back later.
+    """
+    username = req.username.strip()
+    if not auth.USERNAME_RE.match(username):
+        raise HTTPException(
+            status_code=400,
+            detail="Username must be 3-32 characters: letters, digits, dot, dash "
+                   "or underscore, starting with a letter or digit.",
+        )
+    if auth.ADMIN_USERNAME and username.lower() == auth.ADMIN_USERNAME.lower():
+        raise HTTPException(
+            status_code=400, detail="That username belongs to the admin account."
+        )
+    password = _check_password(req.password)
+    try:
+        user = await db.create_user(
+            username=username, password=password, display_name=req.displayName
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {**user, "password": password}
+
+
+@app.post("/api/admin/users/{user_id}/password")
+async def admin_set_password(
+    user_id: str, req: SetPasswordRequest, _: dict = Depends(require_admin)
+):
+    """Reset a password and hand back the new one — shown once, then hashed."""
+    password = _check_password(req.password)
+    if not await db.set_password(user_id, password):
+        raise HTTPException(status_code=404, detail="No such user.")
+    return {"userId": user_id, "password": password}
+
+
+@app.post("/api/admin/users/{user_id}/disabled")
+async def admin_set_disabled(
+    user_id: str, req: SetDisabledRequest, _: dict = Depends(require_admin)
+):
+    """Suspend or restore an account. A disabled account's cookie stops working
+    on its next request, so access ends immediately rather than at expiry."""
+    if not await db.set_disabled(user_id, req.disabled):
+        raise HTTPException(status_code=404, detail="No such user.")
+    return {"userId": user_id, "disabled": req.disabled}
+
+
+@app.post("/api/admin/users/{user_id}/minutes")
+async def admin_set_minutes(
+    user_id: str, req: SetMinutesRequest, _: dict = Depends(require_admin)
+):
+    """Set (or, with a blank/null body, clear) this account's TTS minute budget.
+    Synthesis is hard-blocked once minutesUsed reaches this limit."""
+    if not await db.set_minutes_limit(user_id, req.minutesLimit):
+        raise HTTPException(status_code=404, detail="No such user.")
+    return {"userId": user_id, "minutesLimit": req.minutesLimit}
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, _: dict = Depends(require_admin)):
+    """Delete an account and everything it owns — renders, audio files, cloned
+    voices, likes, and its usage rows. The spend history goes with it."""
+    if not await db.delete_user(user_id):
+        raise HTTPException(status_code=404, detail="No such user.")
+    return {"deleted": user_id}
 
 
 @app.get("/")
